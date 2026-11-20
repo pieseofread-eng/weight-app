@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版13（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版14（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -147,7 +147,8 @@ $('cdate').onchange = () => { renderHint(); renderWork(); };
 // 台紙のシールは重さで見分ける。日時が両方とも読めているときは日時も合わせる
 // 同じ重さが2枚あれば、前回の記録にも2枚あるときだけ両方を「数えた」とする
 const same=(a,b)=>Number(a).toFixed(2)===Number(b).toFixed(2);
-const RULES=[(w,p)=>w.dt&&p.dt===w.dt, (w,p)=>!w.dt||!p.dt];
+const near=(a,b)=>Math.abs(new Date(a)-new Date(b))<=864e5;
+const RULES=[(w,p)=>w.dt&&p.dt===w.dt, (w,p)=>!w.dt||!p.dt||near(w.dt,p.dt)];
 const cap=()=>db.cap||16;
 let pastes=[], okNew=false; // 貼り付けごとの記録 {g, n, miss}、台紙が替わったことを確かめたか
 // 回収日は火・木・土。その月の最後の回収日を過ぎたら翌月の分になり、台紙も白紙から始まる
@@ -196,16 +197,21 @@ function analyze(){
       if(x){ x.used=w.done=true; mCur++; if(x===cur.find(y=>y.dt===(st.last&&st.last.dt)&&same(y.kg,st.last.kg))) lastFound=true; return; }
       x=old.find(x=>!x.used&&same(x.kg,w.kg)&&rule(w,x)); if(x){ x.used=w.done=true; mOld++; }
     }));
+    // 重さが読めなかったシールでも、日時が記録と同じなら記録済み（前に手で直した分）とみなす
+    items.forEach(w=>{
+      if(w.kg||!w.dt) return;
+      const x=cur.find(x=>!x.used&&x.dt===w.dt); if(x){ x.used=w.done=true; w.kg=x.kg; mCur++; }
+    });
     items.forEach(w=>{
       if(w.done||!w.kg) return;
-      const e=earlier.find(x=>!x.taken&&!x.dup&&!x.done&&x.kg&&same(x.kg,w.kg)&&(!x.dt||!w.dt||x.dt===w.dt));
+      const e=earlier.find(x=>!x.taken&&!x.dup&&!x.done&&x.kg&&same(x.kg,w.kg)&&(!x.dt||!w.dt||near(x.dt,w.dt)));
       if(e){ e.taken=w.dup=true; ovSheet=ovSheet||e.sheet; }
     });
     const fresh=items.filter(w=>w.kg&&!w.done&&!w.dup);
     let sheet, head=`写真${pi+1}：シール${p.n}枚`;
     if(mCur){
       sheet=st.sheet;
-      const early=st.last&&st.last.dt?fresh.filter(w=>w.dt&&w.dt<st.last.dt):[];
+      const early=st.last&&st.last.dt?fresh.filter(w=>w.dt&&w.dt.slice(0,10)<st.last.dt.slice(0,10)):[];
       early.forEach(w=>w.early=true);
       msgs.push(`✅ ${head}。<b>前回の続き</b>と判断し、前回までの${mCur}枚を外して、新しい${fresh.length-early.length}枚を数えます。`
         +(lastFound?'':`<br>（前回の最後のシール ${fmt(st.last)} は読み取れませんでした。写真の端で切れていないか見てください）`)
@@ -227,7 +233,8 @@ function analyze(){
     if(sheet===st.sheet) onCur+=fresh.filter(w=>!w.early).length;
     const onSheet=sheet===st.sheet?onCur:items.filter(w=>w.kg&&!w.dup).length;
     if(onSheet>C) msgs.push(`<span class="tag">⚠ 台紙のマス（${C}）より多くなりました。読み違いがないか見てください。</span>`);
-    if(p.miss) msgs.push(`<b style="color:var(--warn)">⚠ 写真${pi+1}：${p.miss}枚の重さが読めていません。</b>撮り直すか、赤い行に重さを入れてください。`);
+    const miss=items.filter(w=>!w.kg).length+Math.max(0,p.n-items.length);
+    if(miss) msgs.push(`<b style="color:var(--warn)">⚠ 写真${pi+1}：${miss}枚の重さが読めていません。</b>撮り直すか、赤い行に重さを入れてください。`);
   });
   work.filter(w=>!w.g).forEach(w=>w.sheet=maxSheet||1); // 手で足したシール
   analyze.need=need;
@@ -254,25 +261,30 @@ function readBatch(t,marks){
   if(work.length&&!confirm('入力中のシールを消して、写真をまとめて読み込みますか？')) return;
   const blocks=marks.map((m,i)=>({date:m[1],text:t.slice(m.index,i+1<marks.length?marks[i+1].index:t.length)}))
     .sort((a,b)=>a.date.localeCompare(b.date));
-  const log=[]; let stop=null;
+  const log=[], held=[], heldStores=new Set(), cur=$('store').value;
   for(const b of blocks){
     work=[]; pastes=[]; okNew=false; storeNote='';
-    const md=b.date.slice(5).replace('-','/');
+    const md=b.date.slice(5).replace('-','/'), sf=findStore(b.text)||cur;
+    // 同じ店舗で確認待ちの写真があれば、順番が狂わないよう後回し
+    if(heldStores.has(sf)){ held.push(b); log.push(`・${md}　${esc(sf)}：前の写真の確認待ちなので、あとで読みます`); continue; }
     // 記録済みの日より前の写真は飛ばす（同じ日の写真は、前回の続きとして重なりを外して読む）
-    const sf=findStore(b.text), lastD=db.collections.filter(c=>c.store===(sf||$('store').value)).map(c=>c.date).sort().pop();
-    if(lastD&&b.date<lastD){ log.push(`・${md}：記録済みなので飛ばしました`); continue; }
+    const lastD=db.collections.filter(c=>c.store===sf).map(c=>c.date).sort().pop();
+    if(lastD&&b.date<lastD){ log.push(`・${md}　${esc(sf)}：記録済みなので飛ばしました`); continue; }
     readText(b.text);
     if(!work.length){ log.push(`・${md}：シールが見つかりませんでした`); continue; }
-    if(work.some(w=>!w.kg)||(analyze.need&&!okNew)||work.some(w=>w.early)){ stop=md; break; }
+    const st=$('store').value;
+    if(work.some(w=>!w.kg)||(analyze.need&&!okNew)||work.some(w=>w.early)){ held.push(b); heldStores.add(st); log.push(`・${md}　${esc(st)}：<b style="color:var(--warn)">確認が必要です</b>`); continue; }
     const add=work.filter(counted);
-    if(!add.length){ log.push(`・${md}：前回から増えたシールはありませんでした`); work=[]; pastes=[]; continue; }
+    if(!add.length){ log.push(`・${md}　${esc(st)}：前回から増えたシールはありませんでした`); continue; }
     const sp=snapshot(); saveCollection(true);
-    log.push(`・${md}　${esc($('store').value)}：台紙 ${sp.n}枚 ${sp.kg.toFixed(2)}kg（増えた分 ${add.length}枚 ${kgs(add)}kg）を記録しました`);
+    log.push(`・${md}　${esc(st)}：台紙 ${sp.n}枚 ${sp.kg.toFixed(2)}kg（増えた分 ${add.length}枚 ${kgs(add)}kg）を記録しました`);
   }
-  renderWork();
+  // 確認が必要な最初の写真を、下の一覧に出す
+  work=[]; pastes=[]; okNew=false; storeNote='';
+  if(held.length) readText(held[0].text); else renderWork();
   const head=`<b>📚 写真${blocks.length}枚をまとめて読み込みました</b><br>${log.join('<br>')}`;
-  $('status').innerHTML = stop
-    ? `${head}<br><br><b style="color:var(--warn)">⚠ ${stop}の写真で確認が必要なので、ここで止まりました。</b><br>下の内容を確かめて記録したあと、もう一度「貼り付けて読み取る」を押すと、続きから読み込みます。<br><br>`+$('status').innerHTML
+  $('status').innerHTML = held.length
+    ? `${head}<br><br><b style="color:var(--warn)">⚠ 確認が必要な写真が${held.length}枚あります。</b>いま下に出ているのは ${esc($('store').value)} の写真です。<br>直して「この内容で記録する」を押したあと、もう一度「貼り付けて読み取る」を押すと、残りを読みます。<br><br>`+$('status').innerHTML
     : head;
 }
 function readText(t){
@@ -294,40 +306,73 @@ function readText(t){
 }
 function parseText(t){
   // シール1枚には「鮮魚」「魚のアラ」の行がある。これを目印に1枚ずつ区切る
-  // 日時は目印のすぐ上の行、重量は目印より後に出てきた順に、まだ重量のないシールへ入れる
+  // 「鮮魚 鮮魚 魚のアラ 魚のアラ」のように2枚分が続けて読まれることもあるので、続いた目印の多いほうを枚数とする
+  // 日時は目印のすぐ上に続く日時の行、重量は目印より後に出てきた順に、まだ重量のないシールへ入れる
   const s=t.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0))
-    .replace(/(鮮魚|魚のアラ)/g,'\n$1\n').replace(/(20[2-3]\d(?=[^\d\n]+\d))/g,'\n$1');
+    .replace(/([鮮詳鲜]魚|魚のアラ)/g,'\n$1\n').replace(/([02]0[2-3]\d(?=[^\d\n]*\d))/g,'\n$1');
   const lines=s.split('\n').map(x=>x.trim()).filter(x=>x);
-  if(!lines.some(x=>/鮮魚|アラ/.test(x))){ parseText.stats={}; return parseLoose(t); }
-  const out=[]; let prevAnchor=false;
-  lines.forEach((ln,i)=>{
-    if(/鮮魚|アラ/.test(ln)){
-      if(!prevAnchor){ const dt=readDate(lines[i-1]||'')||readDate((lines[i-2]||'')+' '+(lines[i-1]||'')); out.push({dt,kg:0}); }
-      prevAnchor=true; return;
+  const isA=x=>/[鮮詳鲜]魚|アラ/.test(x), isFish=x=>/[鮮詳鲜]魚/.test(x);
+  if(!lines.some(isA)){ parseText.stats={}; return parseLoose(t); }
+  const out=[]; let i=0, dates=0;
+  while(i<lines.length){
+    const ln=lines[i];
+    if(isA(ln)){
+      let j=i; while(j<lines.length&&isA(lines[j])) j++;
+      const run=lines.slice(i,j), n=Math.max(run.filter(isFish).length,run.filter(x=>!isFish(x)).length);
+      const ds=[]; for(let k=i-1;k>=0&&ds.length<n;k--){ const d=readDate(lines[k]); if(!d) break; ds.unshift(d); }
+      if(!ds.length&&i>=2){ const d=readDate(lines[i-2]+' '+lines[i-1]); if(d) ds.push(d); } // 日付と時刻が別の行
+      // 店名の行のあとに新しいシールが始まったら、前のシールは重さが読めなかったものとして閉じる
+      out.forEach(x=>{ if(x.mark&&!x.kg) x.closed=true; });
+      for(let k=0;k<n;k++) out.push({dt:ds[k-(n-ds.length)]||'',kg:0});
+      i=j; continue;
     }
-    prevAnchor=false;
-    const re=/(\d{1,3})\s*[.,:;·・]?\s*(\d{2})\s*[kKｋxX]/g; let m;
-    if(readDate(ln)) return;
-    // 「kg」が読めず「20.96」だけの行も重さとして拾う
-    if(!re.test(ln)&&/^\d{1,3}[.,]\d{2}\D{0,2}$/.test(ln)) ln=ln.replace(/\D{0,2}$/,'kg'); re.lastIndex=0;
-    while((m=re.exec(ln))){
-      const kg=parseFloat(m[1]+'.'+m[2]); if(kg<=0||kg>300) continue;
-      const w=out.find(x=>!x.kg); if(w) w.kg=kg; else out.push({dt:'',kg});
-    }
-  });
-  parseText.stats={seals:out.length,dates:lines.filter(x=>readDate(x)).length};
-  return out;
+    i++;
+    if(readDate(ln)){ dates++; continue; }
+    if(/^\D{0,3}[02]0[2-3]\d\D*\d/.test(ln)&&!/^\d{3,4}\s*[kKｋxXкК]/.test(ln)) continue; // 日時が読めなかった日時の行
+    for(const kg of readKg(ln)){ const w=out.find(x=>!x.kg&&!x.closed); if(w) w.kg=kg; else out.push({dt:'',kg}); }
+    if(/[^\d\s]店/.test(ln)) out.forEach(x=>x.mark=true);
+  }
+  parseText.stats={seals:out.length,dates};
+  return out.map(x=>({dt:x.dt,kg:x.kg}));
 }
-// 「2026#11:148 16#48»」のように漢字が記号や数字に読み違えられても、日時を取り出す
+// 重さの読み取り：「13. 94ks」「2158ks」「8. Обкв」「29.02c/」「11.54」などの読み違いも拾う
+function readKg(ln){
+  ln=ln.replace(/^(\d{1,3}\s*[.,]\s*)([0-9OoОоб]{2})/,(m,a,b)=>a+b.replace(/[OoОо]/g,'0').replace(/б/g,'6'));
+  const res=[]; let m;
+  const dec=/(\d{1,3})\s*[.,]\s*(\d{2})(?!\d)/g;
+  while((m=dec.exec(ln))) res.push(parseFloat(m[1]+'.'+m[2]));
+  if(!res.length){ const nod=/(?:^|[^\d.])(\d{1,3})(\d{2})\s*[kKｋxXкК]/g; while((m=nod.exec(ln))) res.push(parseFloat(m[1]+'.'+m[2])); }
+  return res.filter(kg=>kg>0&&kg<=300);
+}
+// 「2026#11:148 16#48»」「2026-11円14c18-074」のように漢字が記号や数字に読み違えられても、日時を取り出す
 function readDate(ln){
-  const m=ln.match(/^\D{0,3}(20[2-3]\d)\D+(.*)$/); if(!m) return '';
-  const parts=m[2].trim().split(/\s+/); if(parts.length<2) return '';
-  const tp=parts.pop(), dp=parts.join('');
-  const y=+m[1], ref=$ref();
-  const ds=pick(dp,1,12,1,31,(a,b)=>{ const d=new Date(y,a-1,b); return d>ref?null:(ref-d); });
-  const ts=pick(tp,0,23,0,59,()=>0,true);
-  if(!ds||!ts) return '';
-  return `${y}-${pad(ds[0])}-${pad(ds[1])}T${pad(ts[0])}:${pad(ts[1])}`;
+  const m=ln.match(/^\D{0,3}([02]0[2-3]\d)\D*(.*)$/); if(!m) return '';
+  const y=2000+ +m[1].slice(2), ref=$ref(), rest=m[2].trim();
+  const okDate=(a,b)=>{ const d=new Date(y,a-1,b); return d>ref||ref-d>62*864e5?null:(ref-d); };
+  // まず「日付 時刻」の空白で分けて読む。だめなら数字を全部つなげて読む
+  const parts=rest.split(/\s+/);
+  if(parts.length===2){
+    const ds=pick(parts[0],1,12,1,31,okDate), ts=pick(parts[1],0,23,0,59,()=>0,true);
+    if(ds&&ts) return `${y}-${pad(ds[0])}-${pad(ds[1])}T${pad(ts[0])}:${pad(ts[1])}`;
+  }
+  const v=pickAll(rest,okDate); if(!v) return '';
+  return `${y}-${pad(v[0])}-${pad(v[1])}T${pad(v[2])}:${pad(v[3])}`;
+}
+// 月・日・時・分を、間に余分な字が1つずつ入っていてもよいとして読む。余分な字が少ないものを選ぶ
+function pickAll(tok,okDate){
+  const d=tok.replace(/\D/g,''), tailOk=/\d\D{0,1}$/.test(tok); let best=null;
+  // シールの月・日・時・分はどれも2けたで印刷されている
+  const ml=2, dl=2, hl=2;
+  for(const j1 of [0,1]) for(const j2 of [0,1]) for(const j3 of [0,1]) for(const j4 of [0,1]){
+    if(ml+j1+dl+j2+hl+j3+2+j4!==d.length||(j4&&!tailOk)) continue;
+    let p=0; const g=(l,j)=>{ const v=+d.slice(p,p+l); p+=l+j; return v; };
+    const mo=g(ml,j1), da=g(dl,j2), h=g(hl,j3), mi=g(2,j4);
+    if(mo<1||mo>12||da<1||da>31||h>23||mi>59) continue;
+    const ds=okDate(mo,da); if(ds===null) continue;
+    const sc=[j1+j2+j3+j4,j1+j2+j3,ds];
+    if(!best||less(sc,best.sc)) best={sc,v:[mo,da,h,mi]};
+  }
+  return best&&best.v;
 }
 const less=(x,y)=>{ for(let k=0;k<x.length;k++) if(x[k]!==y[k]) return x[k]<y[k]; return false; };
 // 数字の並びを「前の数・(余分な1字)・後ろの数・(余分な1字)」に分ける。余分な字は少ないほうを選ぶ
