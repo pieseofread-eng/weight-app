@@ -37,7 +37,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版6（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版7（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -46,6 +46,7 @@
     <select id="store"></select>
     <label>回収日（撮影日）</label>
     <input type="date" id="cdate">
+    <div id="hint" class="muted" style="margin-top:10px"></div>
   </div>
   <div class="card">
     <div class="muted">写真アプリで台紙の写真を開き、文字を長押し →「すべてを選択」→「コピー」してから、下のボタンを押してください。台紙が何枚あっても、1枚ずつ繰り返せば足されていきます。</div>
@@ -84,6 +85,11 @@
     <label>新しい店舗名</label>
     <input id="newstore" placeholder="例：くびき店">
     <button class="sub" onclick="addStore()">店舗を追加</button>
+  </div>
+  <div class="card">
+    <b>台紙のマスの数</b>
+    <div class="muted">台紙1枚に貼れるシールの数です。台紙が替わったかどうかの判断に使います。</div>
+    <input id="capin" type="number" inputmode="numeric" min="1" onchange="db.cap=parseInt(this.value)||16;persist();renderHint()">
   </div>
   <div class="card">
     <b>データの控え</b>
@@ -129,22 +135,84 @@ function renderStores(){
 }
 function addStore(){ const v=$('newstore').value.trim(); if(!v) return; if(!db.stores.includes(v)) db.stores.push(v); $('newstore').value=''; persist(); renderStores(); }
 function delStore(i){ if(confirm(db.stores[i]+' をリストから消しますか？（記録は残ります）')){ db.stores.splice(i,1); persist(); renderStores(); } }
-$('store').onchange = () => { markDone(); renderWork(); };
+$('store').onchange = () => { analyze(); renderWork(); };
 
-// ===== 既に数えたシールかどうか =====
+// ===== 台紙の見張り =====
 // 台紙のシールは重さで見分ける。日時が両方とも読めているときは日時も合わせる
 // 同じ重さが2枚あれば、前回の記録にも2枚あるときだけ両方を「数えた」とする
 const same=(a,b)=>Number(a).toFixed(2)===Number(b).toFixed(2);
-function markDone(){
-  const store=$('store').value, from=new Date(($('cdate').value||today())+'T00:00');
-  from.setDate(from.getDate()-60); const fromS=from.toISOString().slice(0,10);
-  const pool=[]; db.collections.filter(c=>c.store===store&&c.date>=fromS).forEach(c=>c.seals.forEach(x=>pool.push({...x})));
-  work.forEach(w=>{ if(w.done) w.on=true; w.done=false; });
-  [w=>p=>w.dt&&p.dt===w.dt, w=>p=>!w.dt||!p.dt].forEach(rule=>work.forEach(w=>{
-    if(w.done||!w.kg) return;
-    const p=pool.find(p=>!p.used&&same(p.kg,w.kg)&&rule(w)(p));
-    if(p){ p.used=true; w.done=true; w.on=false; }
-  }));
+const RULES=[(w,p)=>w.dt&&p.dt===w.dt, (w,p)=>!w.dt||!p.dt];
+const cap=()=>db.cap||16;
+let pastes=[], okNew=false; // 貼り付けごとの記録 {g, n, miss}、台紙が替わったことを確かめたか
+// 記録から、その店舗の今の台紙（何枚目の台紙か・数えたシール・最後のシール）を求める
+function sheetState(store){
+  const seals=[];
+  db.collections.filter(c=>c.store===store).sort((a,b)=>a.id-b.id).forEach(c=>c.seals.forEach(x=>seals.push(x)));
+  if(!seals.length) return {sheet:0,list:[],old:[],last:null};
+  const sh=x=>x.sheet||1, sheet=Math.max(...seals.map(sh));
+  const list=seals.filter(x=>sh(x)===sheet), dated=list.filter(x=>x.dt).sort((a,b)=>a.dt.localeCompare(b.dt));
+  return {sheet,list,old:seals.filter(x=>sh(x)!==sheet).slice(-cap()*3),last:dated[dated.length-1]||list[list.length-1]};
+}
+const fmt=x=>`${x.dt?x.dt.slice(5).replace('-','/').replace('T',' '):'日時なし'}・${x.kg.toFixed(2)}kg`;
+function renderHint(){
+  const st=sheetState($('store').value), C=cap(), n=st.list.length;
+  $('hint').innerHTML = !st.sheet ? 'この店舗の記録はまだありません。台紙全体を撮ってください。'
+    : `前回まで：台紙${C}マスのうち <b>${n}枚</b> 数えました（最後は ${fmt(st.last)}）<br>`
+      + (n>=C ? '→ 台紙はいっぱいです。<b>今回は新しい台紙のはず</b>です。'
+              : `→ 残り${C-n}マス。今回は<b>前回の続き</b>から写っていれば、途中からの写真でも大丈夫です。`);
+}
+// 一覧のシールを、写真（貼り付け）ごとに「前回までに数えた／重なり／新しい」に分け、台紙を決める
+function analyze(){
+  const st=sheetState($('store').value), C=cap(), msgs=[];
+  const cur=st.list.map(x=>({...x})), old=st.old.map(x=>({...x}));
+  work.forEach(w=>{ w.done=w.dup=w.early=w.taken=false; });
+  let maxSheet=st.sheet, need=false, onCur=st.list.length;
+  pastes.forEach((p,pi)=>{
+    const items=work.filter(w=>w.g===p.g), earlier=work.filter(w=>w.g&&pastes.findIndex(q=>q.g===w.g)<pi);
+    let mCur=0, mOld=0, lastFound=false, ovSheet=0;
+    RULES.forEach(rule=>items.forEach(w=>{
+      if(w.done||!w.kg) return;
+      let x=cur.find(x=>!x.used&&same(x.kg,w.kg)&&rule(w,x));
+      if(x){ x.used=w.done=true; mCur++; if(x===cur.find(y=>y.dt===(st.last&&st.last.dt)&&same(y.kg,st.last.kg))) lastFound=true; return; }
+      x=old.find(x=>!x.used&&same(x.kg,w.kg)&&rule(w,x)); if(x){ x.used=w.done=true; mOld++; }
+    }));
+    items.forEach(w=>{
+      if(w.done||!w.kg) return;
+      const e=earlier.find(x=>!x.taken&&!x.dup&&!x.done&&x.kg&&same(x.kg,w.kg)&&(!x.dt||!w.dt||x.dt===w.dt));
+      if(e){ e.taken=w.dup=true; ovSheet=ovSheet||e.sheet; }
+    });
+    const fresh=items.filter(w=>w.kg&&!w.done&&!w.dup);
+    let sheet, head=`写真${pi+1}：シール${p.n}枚`;
+    if(mCur){
+      sheet=st.sheet;
+      const early=st.last&&st.last.dt?fresh.filter(w=>w.dt&&w.dt<st.last.dt):[];
+      early.forEach(w=>w.early=true);
+      msgs.push(`✅ ${head}。<b>前回の続き</b>と判断し、前回までの${mCur}枚を外して、新しい${fresh.length-early.length}枚を数えます。`
+        +(lastFound?'':`<br>（前回の最後のシール ${fmt(st.last)} は読み取れませんでした。写真の端で切れていないか見てください）`)
+        +(early.length?`<br><span class="tag">⚠ 前回より前の日時なのに記録にないシールが${early.length}枚あります。重さの読み違いかもしれません。数える場合はチェックを入れてください。</span>`:''));
+    } else if(mOld){
+      sheet=Math.max(...st.old.map(x=>x.sheet||1));
+      msgs.push(`✅ ${head}。<b>前の台紙</b>の写真と判断しました（数えた${mOld}枚は外し、残り${fresh.length}枚を数えます）。`);
+    } else if(ovSheet){
+      sheet=ovSheet; msgs.push(`✅ ${head}。前の写真の続きと判断しました（重なった${items.filter(w=>w.dup).length}枚は1枚として数えます）。`);
+    } else if(!st.sheet&&pi===0){
+      sheet=1; msgs.push(`✅ ${head}。この店舗で初めての台紙として数えます。`);
+    } else {
+      sheet=maxSheet+1;
+      if(onCur>=C||!st.sheet) msgs.push(`✅ ${head}。前の台紙がいっぱいだったので、<b>新しい台紙</b>として数えます。`);
+      else { need=true; msgs.push(`<b style="color:var(--warn)">⚠ ${head}。前回のシールが1枚も写っていないので、台紙が替わったようです。</b><br>でも前の台紙は、まだ<b>${C-onCur}マス空いていました</b>。<br>・古い台紙がまだあれば、古い台紙も撮って読み取ってください<br>・台紙は替わっておらず、前回の続きが写っていないだけなら、撮り直してください`); }
+    }
+    items.forEach(w=>w.sheet=sheet); maxSheet=Math.max(maxSheet,sheet);
+    if(sheet===st.sheet) onCur+=fresh.filter(w=>!w.early).length;
+    const onSheet=sheet===st.sheet?onCur:items.filter(w=>w.kg&&!w.dup).length;
+    if(onSheet>C) msgs.push(`<span class="tag">⚠ 台紙のマス（${C}）より多くなりました。読み違いがないか見てください。</span>`);
+    if(p.miss) msgs.push(`<b style="color:var(--warn)">⚠ 写真${pi+1}：${p.miss}枚の重さが読めていません。</b>撮り直すか、赤い行に重さを入れてください。`);
+  });
+  work.filter(w=>!w.g).forEach(w=>w.sheet=maxSheet||1); // 手で足したシール
+  analyze.need=need;
+  $('status').innerHTML=msgs.join('<br><br>')
+    +(need?`<button class="sub" onclick="okNew=true;renderWork()">${okNew?'✔ 確かめました（古い台紙の残りはない）':'古い台紙の残りはないので、このまま数える'}</button>`:'')
+    +(pastes.length?'<br><br>最後に、写真と数字が合っているかを見てください。':'');
 }
 
 // ===== 文字の読み取り（iPhoneの「テキスト認識表示」でコピーした文字。外には送らない） =====
@@ -155,15 +223,13 @@ async function pasteText(){
 function readText(t){
   const found=parseText(t||''), st0=parseText.stats||{};
   // 同じ文字を2回読んだときに二重にならないよう、一覧にあるものと1枚ずつ突き合わせる
-  const had=work.map(w=>({...w})); let add=0;
-  found.forEach(f=>{ const h=had.find(w=>!w.used&&w.dt===f.dt&&same(w.kg,f.kg)); if(h) h.used=true; else { work.push({...f,on:true}); add++; } });
+  const had=work.map(w=>({...w})), g=Date.now()+Math.random(); let add=0;
+  found.forEach(f=>{ const h=had.find(w=>!w.used&&w.dt===f.dt&&same(w.kg,f.kg)); if(h) h.used=true; else { work.push({...f,g}); add++; } });
   // 店舗名が文字の中にあれば自動で選ぶ
   const st=db.stores.find(x=>t.includes(x)); if(st) $('store').value=st;
-  const n=Math.max(st0.seals||0,st0.dates||0,found.length), miss=n-found.filter(f=>f.kg).length;
-  $('status').innerHTML = miss>0
-    ? `<b style="color:var(--warn)">⚠ シール${n}枚のうち、${miss}枚の重さが読めていません。</b><br>写真を撮り直して読み直すか、赤い行に重さを入れてください。`
-    : `✅ シール${n}枚を見つけ、${n}枚とも重さを読めました（新しく${add}枚を一覧に加えました）。<br>最後に、<b>台紙の一番最後の番号が${n}になっているか</b>と、写真と数字が合っているかを見てください。`;
-  $('paste').value=t; markDone(); renderWork();
+  if(add){ const n=Math.max(st0.seals||0,st0.dates||0,found.length); pastes.push({g,n,miss:n-found.filter(f=>f.kg).length}); }
+  $('paste').value=t; renderHint(); renderWork();
+  if(!add) $('status').innerHTML+='<br><br>（この文字は、もう読み取り済みでした）';
 }
 function parseText(t){
   // シール1枚には「鮮魚」「魚のアラ」の行がある。これを目印に1枚ずつ区切る
@@ -244,30 +310,33 @@ const pad=n=>String(n).padStart(2,'0');
 const $ref=()=>{ const v=$('cdate').value; const d=v?new Date(v+'T00:00'):new Date(); d.setDate(d.getDate()+1); return d; };
 
 // ===== 一覧 =====
+const counted=w=>w.kg&&!w.done&&!w.dup&&(!w.early||w.force);
 function renderWork(){
+  analyze();
   $('seals').innerHTML = work.length ? work.map((w,i)=>`
-    <div class="seal ${w.done?'done':''}">
-      <input type="checkbox" ${w.on?'checked':''} onchange="work[${i}].on=this.checked;sum()">
-      <input class="dt" type="datetime-local" value="${w.dt}" onchange="work[${i}].dt=this.value;markDone();renderWork()">
-      <input class="wt" type="number" step="0.01" inputmode="decimal" value="${w.kg}" onchange="work[${i}].kg=parseFloat(this.value)||0;markDone();renderWork()">
+    <div class="seal ${w.done||w.dup?'done':''}">
+      <input type="checkbox" ${counted(w)?'checked':''} ${w.early?'':'disabled'} onchange="work[${i}].force=this.checked;sum()">
+      <input class="dt" type="datetime-local" value="${w.dt}" onchange="work[${i}].dt=this.value;renderWork()">
+      <input class="wt" type="number" step="0.01" inputmode="decimal" value="${w.kg}" onchange="work[${i}].kg=parseFloat(this.value)||0;renderWork()">
       <button class="small" onclick="work.splice(${i},1);renderWork()">✕</button>
-    </div>${w.done?'<div class="tag">前回までに数えたシール</div>':''}${!w.kg?'<div class="tag">重さが読めていません。入力してください</div>':''}${!w.dt?'<div class="muted">日時は読めませんでした（このままでも記録できます）</div>':''}`).join('')
+    </div>${w.done?'<div class="tag">前回までに数えたシール（数えません）</div>':''}${w.dup?'<div class="tag">別の写真と重なったシール（1枚として数えます）</div>':''}${w.early?'<div class="tag">前回より前の日時です。数える場合はチェック</div>':''}${!w.kg?'<div class="tag">重さが読めていません。入力してください</div>':''}${!w.dt?'<div class="muted">日時は読めませんでした（このままでも記録できます）</div>':''}`).join('')
     : '<div class="muted" style="padding:10px 0">まだシールがありません</div>';
   sum();
 }
-function sum(){ const s=work.filter(w=>w.on); $('sum').textContent=`今回：${s.length}枚　${s.reduce((a,w)=>a+w.kg,0).toFixed(2)}kg`; }
-function addManual(){ work.push({dt:'', kg:0, on:true}); renderWork(); }
-function clearWork(){ if(!work.length||confirm('入力中のシールを消しますか？')){ work=[]; $('status').textContent=''; renderWork(); } }
+function sum(){ const s=work.filter(counted); $('sum').textContent=`今回：${s.length}枚　${s.reduce((a,w)=>a+w.kg,0).toFixed(2)}kg`; }
+function addManual(){ work.push({dt:'', kg:0}); renderWork(); }
+function clearWork(){ if(!work.length||confirm('入力中のシールを消しますか？')){ work=[]; pastes=[]; okNew=false; renderWork(); } }
 
 function saveCollection(){
   const store=$('store').value; if(!store) return alert('先に設定で店舗を登録してください');
-  const seals=work.filter(w=>w.on);
-  if(!seals.length) return alert('チェックの付いたシールがありません');
   if(work.some(s=>!s.kg)) return alert('重さが読めていないシールがあります。写真を撮り直すか、重さを入力してください');
+  if(analyze.need&&!okNew) return alert('台紙が替わったようです。古い台紙も読み取るか、「このまま数える」を押してください');
+  const seals=work.filter(counted);
+  if(!seals.length) return alert('今回数えるシールがありません');
   const total=seals.reduce((a,w)=>a+w.kg,0);
   if(!confirm(`${store}　${$('cdate').value}\n${seals.length}枚　${total.toFixed(2)}kg\nこの内容で記録しますか？`)) return;
-  db.collections.push({id:Date.now(), store, date:$('cdate').value, seals:seals.map(s=>({dt:s.dt,kg:s.kg}))});
-  persist(); work=[]; $('status').textContent='記録しました'; renderWork();
+  db.collections.push({id:Date.now(), store, date:$('cdate').value, seals:seals.map(s=>({dt:s.dt,kg:s.kg,sheet:s.sheet||1}))});
+  persist(); work=[]; pastes=[]; okNew=false; renderHint(); renderWork(); $('status').textContent='記録しました';
 }
 
 // ===== 記録 =====
@@ -283,7 +352,7 @@ function renderHistory(){
   }).join('') || '<div class="card muted">記録はまだありません</div>';
   $('hsum').textContent = `合計：${list.length}回　${n}枚　${kg.toFixed(2)}kg`;
 }
-function delCol(id){ if(confirm('この回収の記録を消しますか？')){ db.collections=db.collections.filter(c=>c.id!==id); persist(); renderHistory(); } }
+function delCol(id){ if(confirm('この回収の記録を消しますか？')){ db.collections=db.collections.filter(c=>c.id!==id); persist(); renderHistory(); renderHint(); } }
 
 // ===== 控え =====
 function exportData(){
@@ -301,8 +370,8 @@ $('imp').onchange=async e=>{
 
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-$('cdate').value=today(); $('hmonth').value=today().slice(0,7);
-renderStores(); renderWork();
+$('cdate').value=today(); $('hmonth').value=today().slice(0,7); $('capin').value=cap();
+renderStores(); renderHint(); renderWork();
 </script>
 </body>
 </html>
