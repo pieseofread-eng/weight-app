@@ -161,17 +161,23 @@ function readText(t){
 function parseSeals(){ return []; }
 function parseText(t){
   // 日付が続けて並ぶこともあるので、「待っている日付」の古い順に重量を割り当てる
+  // 日付と時刻が別の行に分かれても、年が欠けても読めるように、文字全体を順に探す
   const out=[], wait=[];
-  t.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).split(/\n/).forEach(line=>{
-    const L=line.trim();
-    const d=L.match(/(20\d\d)\D{0,2}?(\d{1,2})\D{1,2}?(\d{1,2})\D{0,3}?(\d{1,2})\D{1,2}?(\d{2})/);
-    if(d){ const [_,y,mo,da,h,mi]=d.map(Number);
-      if(mo>=1&&mo<=12&&da>=1&&da<=31&&h<=23&&mi<=59){
-        const x={dt:`${y}-${pad(mo)}-${pad(da)}T${pad(h)}:${pad(mi)}`,kg:0}; out.push(x); wait.push(x); return; } }
-    const w=L.match(/^(\d{1,3})\s*[.,:;·]?\s*(\d{2})\s*[kK]/);
-    if(w){ const kg=parseFloat(w[1]+'.'+w[2]);
-      if(wait.length) wait.shift().kg=kg; else out.push({dt:'',kg}); }
-  });
+  const s=t.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).replace(/[：]/g,':');
+  const re=/(?:(?:20)?(\d{2})\s*[^\d\n月日時分]{1,2}\s*)?(\d{1,2})\s*[^\d]{1,3}?\s*(\d{1,2})\s*[日曰目El]?[^\d]{0,4}?(\d{1,2})\s*[時:hx×Xｘ]\s*(\d{2})\s*分?|(\d{1,3})\s*[.,:;·・]?\s*(\d{2})\s*[kKｋ]/g;
+  const nowY=new Date().getFullYear();
+  let m;
+  while((m=re.exec(s))){
+    if(m[6]!==undefined){
+      const kg=parseFloat(m[6]+'.'+m[7]); if(kg<=0||kg>300) continue;
+      if(wait.length) wait.shift().kg=kg; else out.push({dt:'',kg});
+    } else {
+      const mo=+m[2], da=+m[3], h=+m[4], mi=+m[5];
+      if(mo<1||mo>12||da<1||da>31||h>23||mi>59) continue;
+      let y=m[1]?2000+ +m[1]:nowY; if(y<nowY-1||y>nowY+1) y=nowY;
+      const x={dt:`${y}-${pad(mo)}-${pad(da)}T${pad(h)}:${pad(mi)}`,kg:0}; out.push(x); wait.push(x);
+    }
+  }
   return out;
 }
 const pad=n=>String(n).padStart(2,'0');
