@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版10（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版11（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -75,7 +75,7 @@
     <select id="hstore" onchange="renderHistory()"></select>
     <label>月</label>
     <input type="month" id="hmonth" onchange="renderHistory()">
-    <div class="muted" style="margin-top:10px">📅 月末の集計</div>
+    <div class="muted" style="margin-top:10px">📅 月末の集計（月の最後の回収日まで）</div>
     <div class="total" id="hsum"></div>
   </div>
   <div id="hlist"></div>
@@ -150,25 +150,36 @@ const same=(a,b)=>Number(a).toFixed(2)===Number(b).toFixed(2);
 const RULES=[(w,p)=>w.dt&&p.dt===w.dt, (w,p)=>!w.dt||!p.dt];
 const cap=()=>db.cap||16;
 let pastes=[], okNew=false; // 貼り付けごとの記録 {g, n, miss}、台紙が替わったことを確かめたか
+// 回収日は火・木・土。その月の最後の回収日を過ぎたら翌月の分になり、台紙も白紙から始まる
+function lastPickup(y,m){ let d=new Date(y,m,0).getDate(); while(![2,4,6].includes(new Date(y,m-1,d).getDay())) d--; return d; }
+function period(ds){
+  const [y,m,d]=ds.split('-').map(Number);
+  if(d<=lastPickup(y,m)) return `${y}-${pad(m)}`;
+  return m===12?`${y+1}-01`:`${y}-${pad(m+1)}`;
+}
+const per=c=>c.period||period(c.date);
+const ym=p=>`${+p.slice(5,7)}月`;
 // 記録から、その店舗の今の台紙（何枚目の台紙か・数えたシール・最後のシール）を求める
 function sheetState(store){
   const seals=[], cols=db.collections.filter(c=>c.store===store).sort((a,b)=>a.id-b.id);
   cols.forEach(c=>c.seals.forEach(x=>seals.push(x)));
   if(!seals.length) return {sheet:0,list:[],old:[],last:null};
   // 台紙は毎月1日に白紙から始まる。前回の回収が先月なら、今回は新しい台紙のはず
-  const lastDate=cols.map(c=>c.date).sort().pop(), monthNew=lastDate.slice(0,7)<($('cdate').value||today()).slice(0,7);
+  const lastP=cols.map(per).sort().pop(), monthNew=lastP<period($('cdate').value||today());
   const sh=x=>x.sheet||1, sheet=Math.max(...seals.map(sh));
   const list=seals.filter(x=>sh(x)===sheet), dated=list.filter(x=>x.dt).sort((a,b)=>a.dt.localeCompare(b.dt));
   return {sheet,list,old:seals.filter(x=>sh(x)!==sheet).slice(-cap()*3),last:dated[dated.length-1]||list[list.length-1],monthNew};
 }
 const fmt=x=>`${x.dt?x.dt.slice(5).replace('-','/').replace('T',' '):'日時なし'}・${x.kg.toFixed(2)}kg`;
 function renderHint(){
-  const st=sheetState($('store').value), C=cap(), n=st.list.length;
-  $('hint').innerHTML = !st.sheet ? 'この店舗の記録はまだありません。台紙全体を撮ってください。'
+  const st=sheetState($('store').value), C=cap(), n=st.list.length, p=period($('cdate').value||today());
+  const pm=p.split('-').map(Number);
+  $('hint').innerHTML = `この撮影日は <b>${ym(p)}分</b> の集計です（${ym(p)}の最後の回収日は ${pm[1]}/${lastPickup(pm[0],pm[1])}）<br>`
+   + (!st.sheet ? 'この店舗の記録はまだありません。台紙全体を撮ってください。'
     : `前回まで：台紙${C}マスのうち <b>${n}枚</b> 数えました（最後は ${fmt(st.last)}）<br>`
-      + (st.monthNew ? '→ 月が変わりました。<b>台紙は白紙から始まっているはず</b>です。'
+      + (st.monthNew ? '→ 前の月の最後の回収日を過ぎました。<b>台紙は白紙から始まっているはず</b>です。'
         : n>=C ? '→ 台紙はいっぱいです。<b>今回は新しい台紙のはず</b>です。'
-              : `→ 残り${C-n}マス。今回は<b>前回の続き</b>から写っていれば、途中からの写真でも大丈夫です。`);
+              : `→ 残り${C-n}マス。今回は<b>前回の続き</b>から写っていれば、途中からの写真でも大丈夫です。`));
 }
 // 一覧のシールを、写真（貼り付け）ごとに「前回までに数えた／重なり／新しい」に分け、台紙を決める
 function analyze(){
@@ -208,7 +219,7 @@ function analyze(){
       sheet=1; msgs.push(`✅ ${head}。この店舗で初めての台紙として数えます。`);
     } else {
       sheet=maxSheet+1;
-      if(st.monthNew&&sheet===st.sheet+1) msgs.push(`✅ ${head}。月が変わったので、<b>新しい台紙</b>として数えます。<br>（先月の最後の回収のあとに貼られたシールがあれば、先月の台紙も撮って読み取ってください）`);
+      if(st.monthNew&&sheet===st.sheet+1) msgs.push(`✅ ${head}。前の月の最後の回収日を過ぎたので、<b>新しい台紙</b>として数えます。`);
       else if(onCur>=C||!st.sheet) msgs.push(`✅ ${head}。前の台紙がいっぱいだったので、<b>新しい台紙</b>として数えます。`);
       else { need=true; msgs.push(`<b style="color:var(--warn)">⚠ ${head}。前回のシールが1枚も写っていないので、台紙が替わったようです。</b><br>でも前の台紙は、まだ<b>${C-onCur}マス空いていました</b>。<br>・古い台紙がまだあれば、古い台紙も撮って読み取ってください<br>・台紙は替わっておらず、前回の続きが写っていないだけなら、撮り直してください`); }
     }
@@ -364,14 +375,14 @@ function saveCollection(){
   const seals=work.filter(counted), sp=snapshot();
   if(!seals.length) return alert('前回から増えたシールがありません');
   if(!confirm(`${store}　撮影日 ${$('cdate').value}\n撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg\n（前回から増えた分：${seals.length}枚　${kgs(seals)}kg）\nこの内容で記録しますか？`)) return;
-  db.collections.push({id:Date.now(), store, date:$('cdate').value, snapN:sp.n, snapKg:+sp.kg.toFixed(2), seals:seals.map(s=>({dt:s.dt,kg:s.kg,sheet:s.sheet||1}))});
+  db.collections.push({id:Date.now(), store, date:$('cdate').value, period:period($('cdate').value), snapN:sp.n, snapKg:+sp.kg.toFixed(2), seals:seals.map(s=>({dt:s.dt,kg:s.kg,sheet:s.sheet||1}))});
   persist(); work=[]; pastes=[]; okNew=false; storeNote=''; renderHint(); renderWork(); $('status').textContent='記録しました';
 }
 
 // ===== 記録 =====
 function renderHistory(){
   const st=$('hstore').value, mo=$('hmonth').value, my=c=>!st||c.store===st;
-  const list=db.collections.filter(c=>my(c)&&(!mo||c.date.startsWith(mo))).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id);
+  const list=db.collections.filter(c=>my(c)&&(!mo||per(c)===mo)).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id);
   const card=c=>`<div class="card"><b>${c.date.slice(5).replace('-','/')} 撮影</b>
       ${c.snapN!==undefined?`<div class="total">台紙：${c.snapN}枚　${c.snapKg.toFixed(2)}kg</div>`:''}
       <div class="muted">前回から増えた分：${c.seals.length}枚　${kgs(c.seals)}kg</div>
@@ -386,10 +397,10 @@ function renderHistory(){
   const all=list.flatMap(c=>c.seals);
   $('hsum').textContent = `${all.length}枚　${kgs(all)}kg`;
   // 年末の集計：選んだ月の年の、1月〜12月
-  const y=(mo||today()).slice(0,4), ys=db.collections.filter(c=>my(c)&&c.date.startsWith(y));
+  const y=(mo||today()).slice(0,4), ys=db.collections.filter(c=>my(c)&&per(c).startsWith(y));
   let rows='', yn=0, yk=0;
   for(let m=1;m<=12;m++){
-    const ss=ys.filter(c=>c.date.slice(5,7)===pad(m)).flatMap(c=>c.seals); if(!ss.length) continue;
+    const ss=ys.filter(c=>per(c).slice(5,7)===pad(m)).flatMap(c=>c.seals); if(!ss.length) continue;
     yn+=ss.length; yk+=+kgs(ss); rows+=`<tr><td>${m}月</td><td>${ss.length}枚</td><td>${kgs(ss)}kg</td></tr>`;
   }
   $('hyear').innerHTML = rows ? `<div class="muted">${y}年${st?'（'+esc(st)+'）':'（すべての店舗）'}</div><table>${rows}<tr><th>合計</th><th>${yn}枚</th><th>${yk.toFixed(2)}kg</th></tr></table>`
@@ -413,7 +424,7 @@ $('imp').onchange=async e=>{
 
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-$('cdate').value=today(); $('hmonth').value=today().slice(0,7); $('capin').value=cap();
+$('cdate').value=today(); $('hmonth').value=period(today()); $('capin').value=cap();
 renderStores(); renderHint(); renderWork();
 </script>
 </body>
