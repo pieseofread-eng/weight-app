@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版12（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版13（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -249,7 +249,35 @@ async function pasteText(){
   try { const t=await navigator.clipboard.readText(); $('paste').value=t; readText(t); }
   catch { $('status').textContent='自動で貼り付けできませんでした。下の枠を長押しして「ペースト」してください。'; }
 }
+// ショートカット「重量を写真から読む」で何枚もの写真を一度に読んだとき：撮影日の古い順に1回分ずつ記録する
+function readBatch(t,marks){
+  if(work.length&&!confirm('入力中のシールを消して、写真をまとめて読み込みますか？')) return;
+  const blocks=marks.map((m,i)=>({date:m[1],text:t.slice(m.index,i+1<marks.length?marks[i+1].index:t.length)}))
+    .sort((a,b)=>a.date.localeCompare(b.date));
+  const log=[]; let stop=null;
+  for(const b of blocks){
+    work=[]; pastes=[]; okNew=false; storeNote='';
+    const md=b.date.slice(5).replace('-','/');
+    // 記録済みの日より前の写真は飛ばす（同じ日の写真は、前回の続きとして重なりを外して読む）
+    const sf=findStore(b.text), lastD=db.collections.filter(c=>c.store===(sf||$('store').value)).map(c=>c.date).sort().pop();
+    if(lastD&&b.date<lastD){ log.push(`・${md}：記録済みなので飛ばしました`); continue; }
+    readText(b.text);
+    if(!work.length){ log.push(`・${md}：シールが見つかりませんでした`); continue; }
+    if(work.some(w=>!w.kg)||(analyze.need&&!okNew)||work.some(w=>w.early)){ stop=md; break; }
+    const add=work.filter(counted);
+    if(!add.length){ log.push(`・${md}：前回から増えたシールはありませんでした`); work=[]; pastes=[]; continue; }
+    const sp=snapshot(); saveCollection(true);
+    log.push(`・${md}　${esc($('store').value)}：台紙 ${sp.n}枚 ${sp.kg.toFixed(2)}kg（増えた分 ${add.length}枚 ${kgs(add)}kg）を記録しました`);
+  }
+  renderWork();
+  const head=`<b>📚 写真${blocks.length}枚をまとめて読み込みました</b><br>${log.join('<br>')}`;
+  $('status').innerHTML = stop
+    ? `${head}<br><br><b style="color:var(--warn)">⚠ ${stop}の写真で確認が必要なので、ここで止まりました。</b><br>下の内容を確かめて記録したあと、もう一度「貼り付けて読み取る」を押すと、続きから読み込みます。<br><br>`+$('status').innerHTML
+    : head;
+}
 function readText(t){
+  const marks=[...(t||'').matchAll(/撮影日[:：]\s*(20\d\d-\d\d-\d\d)/g)];
+  if(marks.length>1) return readBatch(t,marks);
   // ショートカット「重量を撮る」は、先頭に「撮影日:2026-11-21」を付けてコピーする。あれば撮影日に自動で入れる
   const sd=(t||'').match(/撮影日[:：]\s*(20\d\d)-(\d\d)-(\d\d)/);
   if(sd){ $('cdate').value=`${sd[1]}-${sd[2]}-${sd[3]}`; t=t.replace(sd[0],''); }
@@ -372,15 +400,15 @@ function sum(){
 function addManual(){ work.push({dt:'', kg:0}); renderWork(); }
 function clearWork(){ if(!work.length||confirm('入力中のシールを消しますか？')){ work=[]; pastes=[]; okNew=false; storeNote=''; renderWork(); } }
 
-function saveCollection(){
+function saveCollection(auto){
   const store=$('store').value; if(!store) return alert('先に設定で店舗を登録してください');
   if(work.some(s=>!s.kg)) return alert('重さが読めていないシールがあります。写真を撮り直すか、重さを入力してください');
   if(analyze.need&&!okNew) return alert('台紙が替わったようです。古い台紙も読み取るか、「このまま数える」を押してください');
   const seals=work.filter(counted), sp=snapshot();
   if(!seals.length) return alert('前回から増えたシールがありません');
-  if(!confirm(`${store}　撮影日 ${$('cdate').value}\n撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg\n（前回から増えた分：${seals.length}枚　${kgs(seals)}kg）\nこの内容で記録しますか？`)) return;
+  if(!auto&&!confirm(`${store}　撮影日 ${$('cdate').value}\n撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg\n（前回から増えた分：${seals.length}枚　${kgs(seals)}kg）\nこの内容で記録しますか？`)) return;
   db.collections.push({id:Date.now(), store, date:$('cdate').value, period:period($('cdate').value), snapN:sp.n, snapKg:+sp.kg.toFixed(2), seals:seals.map(s=>({dt:s.dt,kg:s.kg,sheet:s.sheet||1}))});
-  persist(); work=[]; pastes=[]; okNew=false; storeNote=''; renderHint(); renderWork(); $('status').textContent='記録しました';
+  persist(); work=[]; pastes=[]; okNew=false; storeNote=''; renderHint(); if(auto) return true; renderWork(); $('status').textContent='記録しました';
 }
 
 // ===== 記録 =====
