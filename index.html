@@ -40,14 +40,14 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版9（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版10（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
   <div class="card">
     <label>店舗</label>
     <select id="store"></select>
-    <label>回収日（撮影日）</label>
+    <label>撮影日</label>
     <input type="date" id="cdate">
     <div id="hint" class="muted" style="margin-top:10px"></div>
   </div>
@@ -75,9 +75,11 @@
     <select id="hstore" onchange="renderHistory()"></select>
     <label>月</label>
     <input type="month" id="hmonth" onchange="renderHistory()">
+    <div class="muted" style="margin-top:10px">📅 月末の集計</div>
     <div class="total" id="hsum"></div>
   </div>
   <div id="hlist"></div>
+  <div class="card"><b>🗓 年末の集計</b><div id="hyear"></div></div>
 </section>
 
 <!-- 設定 -->
@@ -339,7 +341,19 @@ function renderWork(){
     : '<div class="muted" style="padding:10px 0">まだシールがありません</div>';
   sum();
 }
-function sum(){ const s=work.filter(counted); $('sum').textContent=`今回：${s.length}枚　${s.reduce((a,w)=>a+w.kg,0).toFixed(2)}kg`; }
+// 撮影した時点で台紙に貼られていたシール（前回までに数えた分＋今回増えた分）
+function snapshot(){
+  const st=sheetState($('store').value), add=work.filter(counted);
+  if(!add.length&&!work.some(w=>w.done)) return {n:0,kg:0,add};
+  const sh=Math.max(...work.filter(w=>w.kg&&!w.dup).map(w=>w.sheet||1));
+  const on=(sh===st.sheet?st.list:[]).concat(add.filter(w=>(w.sheet||1)===sh));
+  return {n:on.length, kg:on.reduce((a,w)=>a+w.kg,0), add};
+}
+const kgs=a=>a.reduce((s,w)=>s+w.kg,0).toFixed(2);
+function sum(){
+  const sp=snapshot();
+  $('sum').innerHTML=`撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg<br><span style="font-size:16px">（前回から増えた分：${sp.add.length}枚　${kgs(sp.add)}kg）</span>`;
+}
 function addManual(){ work.push({dt:'', kg:0}); renderWork(); }
 function clearWork(){ if(!work.length||confirm('入力中のシールを消しますか？')){ work=[]; pastes=[]; okNew=false; storeNote=''; renderWork(); } }
 
@@ -347,32 +361,39 @@ function saveCollection(){
   const store=$('store').value; if(!store) return alert('先に設定で店舗を登録してください');
   if(work.some(s=>!s.kg)) return alert('重さが読めていないシールがあります。写真を撮り直すか、重さを入力してください');
   if(analyze.need&&!okNew) return alert('台紙が替わったようです。古い台紙も読み取るか、「このまま数える」を押してください');
-  const seals=work.filter(counted);
-  if(!seals.length) return alert('今回数えるシールがありません');
-  const total=seals.reduce((a,w)=>a+w.kg,0);
-  if(!confirm(`${store}　${$('cdate').value}\n${seals.length}枚　${total.toFixed(2)}kg\nこの内容で記録しますか？`)) return;
-  db.collections.push({id:Date.now(), store, date:$('cdate').value, seals:seals.map(s=>({dt:s.dt,kg:s.kg,sheet:s.sheet||1}))});
+  const seals=work.filter(counted), sp=snapshot();
+  if(!seals.length) return alert('前回から増えたシールがありません');
+  if(!confirm(`${store}　撮影日 ${$('cdate').value}\n撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg\n（前回から増えた分：${seals.length}枚　${kgs(seals)}kg）\nこの内容で記録しますか？`)) return;
+  db.collections.push({id:Date.now(), store, date:$('cdate').value, snapN:sp.n, snapKg:+sp.kg.toFixed(2), seals:seals.map(s=>({dt:s.dt,kg:s.kg,sheet:s.sheet||1}))});
   persist(); work=[]; pastes=[]; okNew=false; storeNote=''; renderHint(); renderWork(); $('status').textContent='記録しました';
 }
 
 // ===== 記録 =====
 function renderHistory(){
-  const st=$('hstore').value, mo=$('hmonth').value;
-  const list=db.collections.filter(c=>(!st||c.store===st)&&(!mo||c.date.startsWith(mo))).sort((a,b)=>b.date.localeCompare(a.date));
-  let n=0,kg=0;
-  const card=c=>{
-    const t=c.seals.reduce((a,s)=>a+s.kg,0); n+=c.seals.length; kg+=t;
-    return `<div class="card"><b>${c.date}</b>　${esc(c.store)}<div class="total">${c.seals.length}枚　${t.toFixed(2)}kg</div>
-      <details><summary class="muted">シールの内訳</summary><table>${c.seals.map(s=>`<tr><td>${s.dt?s.dt.replace('T',' '):'日時なし'}</td><td>${s.kg.toFixed(2)}kg</td></tr>`).join('')}</table></details>
+  const st=$('hstore').value, mo=$('hmonth').value, my=c=>!st||c.store===st;
+  const list=db.collections.filter(c=>my(c)&&(!mo||c.date.startsWith(mo))).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id);
+  const card=c=>`<div class="card"><b>${c.date.slice(5).replace('-','/')} 撮影</b>
+      ${c.snapN!==undefined?`<div class="total">台紙：${c.snapN}枚　${c.snapKg.toFixed(2)}kg</div>`:''}
+      <div class="muted">前回から増えた分：${c.seals.length}枚　${kgs(c.seals)}kg</div>
+      <details><summary class="muted">増えたシールの内訳</summary><table>${c.seals.map(s=>`<tr><td>${s.dt?s.dt.replace('T',' '):'日時なし'}</td><td>${s.kg.toFixed(2)}kg</td></tr>`).join('')}</table></details>
       <button class="small" style="margin-top:8px" onclick="delCol(${c.id})">この記録を消す</button></div>`;
-  };
-  // 店舗ごとのフォルダ
+  // 店舗ごとのフォルダ。その月の合計＝その月に増えたシールの合計（台紙が何枚に替わっても合わせる）
   const names=[...new Set(list.map(c=>c.store))];
   $('hlist').innerHTML = names.map(s=>{
-    const cs=list.filter(c=>c.store===s), sn=cs.reduce((a,c)=>a+c.seals.length,0), sk=cs.reduce((a,c)=>a+c.seals.reduce((b,x)=>b+x.kg,0),0);
-    return `<details class="folder" ${names.length===1?'open':''}><summary>📁 <b>${esc(s)}</b>　${cs.length}回　${sn}枚　${sk.toFixed(2)}kg</summary>${cs.map(card).join('')}</details>`;
-  }).join('') || '<div class="card muted">記録はまだありません</div>';
-  $('hsum').textContent = `合計：${list.length}回　${n}枚　${kg.toFixed(2)}kg`;
+    const cs=list.filter(c=>c.store===s), ss=cs.flatMap(c=>c.seals);
+    return `<details class="folder" ${names.length===1?'open':''}><summary>📁 <b>${esc(s)}</b>　${ss.length}枚　${kgs(ss)}kg（撮影${cs.length}回）</summary>${cs.map(card).join('')}</details>`;
+  }).join('') || '<div class="card muted">この月の記録はまだありません</div>';
+  const all=list.flatMap(c=>c.seals);
+  $('hsum').textContent = `${all.length}枚　${kgs(all)}kg`;
+  // 年末の集計：選んだ月の年の、1月〜12月
+  const y=(mo||today()).slice(0,4), ys=db.collections.filter(c=>my(c)&&c.date.startsWith(y));
+  let rows='', yn=0, yk=0;
+  for(let m=1;m<=12;m++){
+    const ss=ys.filter(c=>c.date.slice(5,7)===pad(m)).flatMap(c=>c.seals); if(!ss.length) continue;
+    yn+=ss.length; yk+=+kgs(ss); rows+=`<tr><td>${m}月</td><td>${ss.length}枚</td><td>${kgs(ss)}kg</td></tr>`;
+  }
+  $('hyear').innerHTML = rows ? `<div class="muted">${y}年${st?'（'+esc(st)+'）':'（すべての店舗）'}</div><table>${rows}<tr><th>合計</th><th>${yn}枚</th><th>${yk.toFixed(2)}kg</th></tr></table>`
+    : `<div class="muted">${y}年の記録はまだありません</div>`;
 }
 function delCol(id){ if(confirm('この回収の記録を消しますか？')){ db.collections=db.collections.filter(c=>c.id!==id); persist(); renderHistory(); renderHint(); } }
 
