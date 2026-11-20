@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版8（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版9（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -138,7 +138,8 @@ function renderStores(){
 }
 function addStore(){ const v=$('newstore').value.trim(); if(!v) return; if(!db.stores.includes(v)) db.stores.push(v); $('newstore').value=''; persist(); renderStores(); }
 function delStore(i){ if(confirm(db.stores[i]+' をリストから消しますか？（記録は残ります）')){ db.stores.splice(i,1); persist(); renderStores(); } }
-$('store').onchange = () => { analyze(); renderWork(); };
+$('store').onchange = () => { renderHint(); renderWork(); };
+$('cdate').onchange = () => { renderHint(); renderWork(); };
 
 // ===== 台紙の見張り =====
 // 台紙のシールは重さで見分ける。日時が両方とも読めているときは日時も合わせる
@@ -149,19 +150,22 @@ const cap=()=>db.cap||16;
 let pastes=[], okNew=false; // 貼り付けごとの記録 {g, n, miss}、台紙が替わったことを確かめたか
 // 記録から、その店舗の今の台紙（何枚目の台紙か・数えたシール・最後のシール）を求める
 function sheetState(store){
-  const seals=[];
-  db.collections.filter(c=>c.store===store).sort((a,b)=>a.id-b.id).forEach(c=>c.seals.forEach(x=>seals.push(x)));
+  const seals=[], cols=db.collections.filter(c=>c.store===store).sort((a,b)=>a.id-b.id);
+  cols.forEach(c=>c.seals.forEach(x=>seals.push(x)));
   if(!seals.length) return {sheet:0,list:[],old:[],last:null};
+  // 台紙は毎月1日に白紙から始まる。前回の回収が先月なら、今回は新しい台紙のはず
+  const lastDate=cols.map(c=>c.date).sort().pop(), monthNew=lastDate.slice(0,7)<($('cdate').value||today()).slice(0,7);
   const sh=x=>x.sheet||1, sheet=Math.max(...seals.map(sh));
   const list=seals.filter(x=>sh(x)===sheet), dated=list.filter(x=>x.dt).sort((a,b)=>a.dt.localeCompare(b.dt));
-  return {sheet,list,old:seals.filter(x=>sh(x)!==sheet).slice(-cap()*3),last:dated[dated.length-1]||list[list.length-1]};
+  return {sheet,list,old:seals.filter(x=>sh(x)!==sheet).slice(-cap()*3),last:dated[dated.length-1]||list[list.length-1],monthNew};
 }
 const fmt=x=>`${x.dt?x.dt.slice(5).replace('-','/').replace('T',' '):'日時なし'}・${x.kg.toFixed(2)}kg`;
 function renderHint(){
   const st=sheetState($('store').value), C=cap(), n=st.list.length;
   $('hint').innerHTML = !st.sheet ? 'この店舗の記録はまだありません。台紙全体を撮ってください。'
     : `前回まで：台紙${C}マスのうち <b>${n}枚</b> 数えました（最後は ${fmt(st.last)}）<br>`
-      + (n>=C ? '→ 台紙はいっぱいです。<b>今回は新しい台紙のはず</b>です。'
+      + (st.monthNew ? '→ 月が変わりました。<b>台紙は白紙から始まっているはず</b>です。'
+        : n>=C ? '→ 台紙はいっぱいです。<b>今回は新しい台紙のはず</b>です。'
               : `→ 残り${C-n}マス。今回は<b>前回の続き</b>から写っていれば、途中からの写真でも大丈夫です。`);
 }
 // 一覧のシールを、写真（貼り付け）ごとに「前回までに数えた／重なり／新しい」に分け、台紙を決める
@@ -202,7 +206,8 @@ function analyze(){
       sheet=1; msgs.push(`✅ ${head}。この店舗で初めての台紙として数えます。`);
     } else {
       sheet=maxSheet+1;
-      if(onCur>=C||!st.sheet) msgs.push(`✅ ${head}。前の台紙がいっぱいだったので、<b>新しい台紙</b>として数えます。`);
+      if(st.monthNew&&sheet===st.sheet+1) msgs.push(`✅ ${head}。月が変わったので、<b>新しい台紙</b>として数えます。<br>（先月の最後の回収のあとに貼られたシールがあれば、先月の台紙も撮って読み取ってください）`);
+      else if(onCur>=C||!st.sheet) msgs.push(`✅ ${head}。前の台紙がいっぱいだったので、<b>新しい台紙</b>として数えます。`);
       else { need=true; msgs.push(`<b style="color:var(--warn)">⚠ ${head}。前回のシールが1枚も写っていないので、台紙が替わったようです。</b><br>でも前の台紙は、まだ<b>${C-onCur}マス空いていました</b>。<br>・古い台紙がまだあれば、古い台紙も撮って読み取ってください<br>・台紙は替わっておらず、前回の続きが写っていないだけなら、撮り直してください`); }
     }
     items.forEach(w=>w.sheet=sheet); maxSheet=Math.max(maxSheet,sheet);
