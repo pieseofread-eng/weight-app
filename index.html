@@ -37,7 +37,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計</header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版3（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -50,7 +50,7 @@
   <div class="card">
     <div class="muted">写真アプリで台紙の写真を開き、文字を長押し →「すべてを選択」→「コピー」してから、下のボタンを押してください。台紙が何枚あっても、1枚ずつ繰り返せば足されていきます。</div>
     <button class="big" onclick="pasteText()">📋 コピーした文字を貼り付けて読み取る</button>
-    <textarea id="paste" rows="4" style="width:100%;margin-top:8px;font-size:15px" placeholder="うまく貼り付かないときは、ここを長押しして「ペースト」→ 下のボタン"></textarea>
+    <textarea id="paste" rows="4" style="width:100%;margin-top:8px;font-size:15px" placeholder="読み取った文字がここに出ます。うまく貼り付かないときは、ここを長押しして「ペースト」→ 下のボタン"></textarea>
     <button class="sub" onclick="readText($('paste').value)">↑ この文字を読み取る</button>
     <div id="status"></div>
     <button class="sub" onclick="addManual()">＋ 手で1枚追加する</button>
@@ -155,7 +155,7 @@ function readText(t){
   // 店舗名が文字の中にあれば自動で選ぶ
   const st=db.stores.find(x=>t.includes(x)); if(st) $('store').value=st;
   $('status').textContent=`シール${found.length}枚を読み取り、新しく${add}枚を一覧に加えました。数字を確認してください。`;
-  $('paste').value=''; markDone(); renderWork();
+  $('paste').value=t; markDone(); renderWork();
 }
 // 上から順に「日時」→「重量」を組にする（読み違いはなるべく直す）
 function parseSeals(){ return []; }
