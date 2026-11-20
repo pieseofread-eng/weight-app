@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版11（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版12（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -231,12 +231,13 @@ function analyze(){
   });
   work.filter(w=>!w.g).forEach(w=>w.sheet=maxSheet||1); // 手で足したシール
   analyze.need=need;
-  $('status').innerHTML=storeNote+msgs.join('<br><br>')
+  $('status').innerHTML=dateNote()+storeNote+msgs.join('<br><br>')
     +(need?`<button class="sub" onclick="okNew=true;renderWork()">${okNew?'✔ 確かめました（古い台紙の残りはない）':'古い台紙の残りはないので、このまま数える'}</button>`:'')
     +(pastes.length?'<br><br>最後に、写真と数字が合っているかを見てください。':'');
 }
 
 let storeNote='';
+const dateNote=()=>pastes.length?`📅 撮影日：${$('cdate').value.slice(5).replace('-','/')}（${'日月火水木金土'[new Date($('cdate').value+'T00:00').getDay()]}）<br><br>`:'';
 function findStore(t){
   const known=db.stores.find(x=>t.includes(x)); if(known) return known;
   const cnt={}; t.split(/\s+/).forEach(w=>{ const m=w.match(/^([^\d\s【】（）()「」.,:;#]{1,10}店)$/); if(m) cnt[m[1]]=(cnt[m[1]]||0)+1; });
@@ -249,6 +250,9 @@ async function pasteText(){
   catch { $('status').textContent='自動で貼り付けできませんでした。下の枠を長押しして「ペースト」してください。'; }
 }
 function readText(t){
+  // ショートカット「重量を撮る」は、先頭に「撮影日:2026-11-21」を付けてコピーする。あれば撮影日に自動で入れる
+  const sd=(t||'').match(/撮影日[:：]\s*(20\d\d)-(\d\d)-(\d\d)/);
+  if(sd){ $('cdate').value=`${sd[1]}-${sd[2]}-${sd[3]}`; t=t.replace(sd[0],''); }
   const found=parseText(t||''), st0=parseText.stats||{};
   // 同じ文字を2回読んだときに二重にならないよう、一覧にあるものと1枚ずつ突き合わせる
   const had=work.map(w=>({...w})), g=Date.now()+Math.random(); let add=0;
