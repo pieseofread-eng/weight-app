@@ -37,7 +37,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版3（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版4（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -157,9 +157,57 @@ function readText(t){
   $('status').textContent=`シール${found.length}枚を読み取り、新しく${add}枚を一覧に加えました。数字を確認してください。`;
   $('paste').value=t; markDone(); renderWork();
 }
-// 上から順に「日時」→「重量」を組にする（読み違いはなるべく直す）
-function parseSeals(){ return []; }
 function parseText(t){
+  // シール1枚には「鮮魚」「魚のアラ」の行がある。これを目印に1枚ずつ区切る
+  // 日時は目印のすぐ上の行、重量は目印より後に出てきた順に、まだ重量のないシールへ入れる
+  const s=t.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0))
+    .replace(/(鮮魚|魚のアラ)/g,'\n$1\n').replace(/(20[2-3]\d(?=[^\d\n]+\d))/g,'\n$1');
+  const lines=s.split('\n').map(x=>x.trim()).filter(x=>x);
+  if(!lines.some(x=>/鮮魚|アラ/.test(x))) return parseLoose(t);
+  const out=[]; let prevAnchor=false;
+  lines.forEach((ln,i)=>{
+    if(/鮮魚|アラ/.test(ln)){
+      if(!prevAnchor){ const dt=readDate(lines[i-1]||'')||readDate((lines[i-2]||'')+' '+(lines[i-1]||'')); out.push({dt,kg:0}); }
+      prevAnchor=true; return;
+    }
+    prevAnchor=false;
+    const re=/(\d{1,3})\s*[.,:;·・]?\s*(\d{2})\s*[kKｋxX]/g; let m;
+    if(readDate(ln)) return;
+    while((m=re.exec(ln))){
+      const kg=parseFloat(m[1]+'.'+m[2]); if(kg<=0||kg>300) continue;
+      const w=out.find(x=>!x.kg); if(w) w.kg=kg; else out.push({dt:'',kg});
+    }
+  });
+  return out.filter(x=>x.kg||x.dt);
+}
+// 「2026#11:148 16#48»」のように漢字が記号や数字に読み違えられても、日時を取り出す
+function readDate(ln){
+  const m=ln.match(/^\D{0,3}(20[2-3]\d)\D+(.*)$/); if(!m) return '';
+  const parts=m[2].trim().split(/\s+/); if(parts.length<2) return '';
+  const tp=parts.pop(), dp=parts.join('');
+  const y=+m[1], ref=$ref();
+  const ds=pick(dp,1,12,1,31,(a,b)=>{ const d=new Date(y,a-1,b); return d>ref?null:(ref-d); });
+  const ts=pick(tp,0,23,0,59,()=>0,true);
+  if(!ds||!ts) return '';
+  return `${y}-${pad(ds[0])}-${pad(ds[1])}T${pad(ts[0])}:${pad(ts[1])}`;
+}
+const less=(x,y)=>{ for(let k=0;k<x.length;k++) if(x[k]!==y[k]) return x[k]<y[k]; return false; };
+// 数字の並びを「前の数・(余分な1字)・後ろの数・(余分な1字)」に分ける。余分な字は少ないほうを選ぶ
+function pick(tok,aMin,aMax,bMin,bMax,dist,b2){
+  const d=tok.replace(/\D/g,''), tailOk=/\d$/.test(tok);
+  let best=null;
+  for(const al of [1,2]) for(const j1 of [0,1]) for(const bl of (b2?[2]:[2,1])) for(const j2 of [0,1]){
+    if(al+j1+bl+j2!==d.length||(j2&&!tailOk)) continue;
+    const a=+d.slice(0,al), b=+d.slice(al+j1,al+j1+bl);
+    if(a<aMin||a>aMax||b<bMin||b>bMax) continue;
+    const ds=dist(a,b); if(ds===null) continue;
+    const sc=[j1,j1+j2,ds];
+    if(!best||less(sc,best.sc)) best={sc,v:[a,b]};
+  }
+  return best&&best.v;
+}
+// 目印（鮮魚・魚のアラ）がないときの読み方（版3まで）
+function parseLoose(t){
   // 日付が続けて並ぶこともあるので、「待っている日付」の古い順に重量を割り当てる
   // 日付と時刻が別の行に分かれても、年が欠けても読めるように、文字全体を順に探す
   const out=[], wait=[];
@@ -181,6 +229,8 @@ function parseText(t){
   return out;
 }
 const pad=n=>String(n).padStart(2,'0');
+// 回収日より後の日付は選ばない
+const $ref=()=>{ const v=$('cdate').value; const d=v?new Date(v+'T00:00'):new Date(); d.setDate(d.getDate()+1); return d; };
 
 // ===== 一覧 =====
 function renderWork(){
