@@ -37,7 +37,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版4（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版5（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -140,7 +140,7 @@ function countedKeys(store){
 }
 function markDone(){
   const keys = countedKeys($('store').value);
-  work.forEach(w => { w.done = !!(w.dt && keys.has(sealKey($('store').value,w.dt,w.kg))); if(w.done) w.on=false; });
+  work.forEach(w => { w.done = !!(w.kg && keys.has(sealKey($('store').value,w.dt,w.kg))); if(w.done) w.on=false; });
 }
 
 // ===== 文字の読み取り（iPhoneの「テキスト認識表示」でコピーした文字。外には送らない） =====
@@ -151,7 +151,7 @@ async function pasteText(){
 function readText(t){
   const found=parseText(t||'');
   let add=0;
-  found.forEach(f=>{ if(!work.some(w=>w.dt&&w.dt===f.dt&&w.kg===f.kg)){ work.push({...f,on:true}); add++; } });
+  found.forEach(f=>{ if(!work.some(w=>w.dt===f.dt&&w.kg===f.kg)){ work.push({...f,on:true}); add++; } });
   // 店舗名が文字の中にあれば自動で選ぶ
   const st=db.stores.find(x=>t.includes(x)); if(st) $('store').value=st;
   $('status').textContent=`シール${found.length}枚を読み取り、新しく${add}枚を一覧に加えました。数字を確認してください。`;
@@ -240,7 +240,7 @@ function renderWork(){
       <input class="dt" type="datetime-local" value="${w.dt}" onchange="work[${i}].dt=this.value;markDone();renderWork()">
       <input class="wt" type="number" step="0.01" inputmode="decimal" value="${w.kg}" onchange="work[${i}].kg=parseFloat(this.value)||0;markDone();renderWork()">
       <button class="small" onclick="work.splice(${i},1);renderWork()">✕</button>
-    </div>${w.done?'<div class="tag">前回までに数えたシール</div>':''}${!w.dt?'<div class="tag">日時が読めませんでした。入力してください</div>':''}`).join('')
+    </div>${w.done?'<div class="tag">前回までに数えたシール</div>':''}${!w.dt?'<div class="muted">日時は読めませんでした（このままでも記録できます）</div>':''}`).join('')
     : '<div class="muted" style="padding:10px 0">まだシールがありません</div>';
   sum();
 }
@@ -252,7 +252,7 @@ function saveCollection(){
   const store=$('store').value; if(!store) return alert('先に設定で店舗を登録してください');
   const seals=work.filter(w=>w.on);
   if(!seals.length) return alert('チェックの付いたシールがありません');
-  if(seals.some(s=>!s.dt||!s.kg)) return alert('日時か重量が空のシールがあります');
+  if(seals.some(s=>!s.kg)) return alert('重量が空のシールがあります');
   const total=seals.reduce((a,w)=>a+w.kg,0);
   if(!confirm(`${store}　${$('cdate').value}\n${seals.length}枚　${total.toFixed(2)}kg\nこの内容で記録しますか？`)) return;
   db.collections.push({id:Date.now(), store, date:$('cdate').value, seals:seals.map(s=>({dt:s.dt,kg:s.kg}))});
@@ -267,7 +267,7 @@ function renderHistory(){
   $('hlist').innerHTML = list.map(c=>{
     const t=c.seals.reduce((a,s)=>a+s.kg,0); n+=c.seals.length; kg+=t;
     return `<div class="card"><b>${c.date}</b>　${esc(c.store)}<div class="total">${c.seals.length}枚　${t.toFixed(2)}kg</div>
-      <details><summary class="muted">シールの内訳</summary><table>${c.seals.map(s=>`<tr><td>${s.dt.replace('T',' ')}</td><td>${s.kg.toFixed(2)}kg</td></tr>`).join('')}</table></details>
+      <details><summary class="muted">シールの内訳</summary><table>${c.seals.map(s=>`<tr><td>${s.dt?s.dt.replace('T',' '):'日時なし'}</td><td>${s.kg.toFixed(2)}kg</td></tr>`).join('')}</table></details>
       <button class="small" style="margin-top:8px" onclick="delCol(${c.id})">この記録を消す</button></div>`;
   }).join('') || '<div class="card muted">記録はまだありません</div>';
   $('hsum').textContent = `合計：${list.length}回　${n}枚　${kg.toFixed(2)}kg`;
