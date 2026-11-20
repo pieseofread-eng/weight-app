@@ -33,11 +33,14 @@
   .hist { padding:10px 0; border-bottom:1px solid var(--line); }
   #status { font-size:15px; color:#555; margin-top:8px; white-space:pre-line; }
   table { width:100%; border-collapse:collapse; font-size:15px; }
+  details.folder { background:#fff; border-radius:12px; padding:12px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  details.folder > summary { font-size:17px; padding:4px 0; }
+  details.folder .card { box-shadow:none; border:1px solid var(--line); margin:10px 0 0; }
   td,th { border-bottom:1px solid var(--line); padding:6px 4px; text-align:left; }
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版7（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版8（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -210,11 +213,18 @@ function analyze(){
   });
   work.filter(w=>!w.g).forEach(w=>w.sheet=maxSheet||1); // 手で足したシール
   analyze.need=need;
-  $('status').innerHTML=msgs.join('<br><br>')
+  $('status').innerHTML=storeNote+msgs.join('<br><br>')
     +(need?`<button class="sub" onclick="okNew=true;renderWork()">${okNew?'✔ 確かめました（古い台紙の残りはない）':'古い台紙の残りはないので、このまま数える'}</button>`:'')
     +(pastes.length?'<br><br>最後に、写真と数字が合っているかを見てください。':'');
 }
 
+let storeNote='';
+function findStore(t){
+  const known=db.stores.find(x=>t.includes(x)); if(known) return known;
+  const cnt={}; t.split(/\s+/).forEach(w=>{ const m=w.match(/^([^\d\s【】（）()「」.,:;#]{1,10}店)$/); if(m) cnt[m[1]]=(cnt[m[1]]||0)+1; });
+  const best=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];
+  return best&&cnt[best]>=2?best:null; // 読み違いを避けるため、2回以上出てきた名前だけ
+}
 // ===== 文字の読み取り（iPhoneの「テキスト認識表示」でコピーした文字。外には送らない） =====
 async function pasteText(){
   try { const t=await navigator.clipboard.readText(); $('paste').value=t; readText(t); }
@@ -225,8 +235,9 @@ function readText(t){
   // 同じ文字を2回読んだときに二重にならないよう、一覧にあるものと1枚ずつ突き合わせる
   const had=work.map(w=>({...w})), g=Date.now()+Math.random(); let add=0;
   found.forEach(f=>{ const h=had.find(w=>!w.used&&w.dt===f.dt&&same(w.kg,f.kg)); if(h) h.used=true; else { work.push({...f,g}); add++; } });
-  // 店舗名が文字の中にあれば自動で選ぶ
-  const st=db.stores.find(x=>t.includes(x)); if(st) $('store').value=st;
+  // 店舗名（「○○店」）を文字から見つけて選ぶ。初めての店舗なら自動で登録する
+  const sf=findStore(t||'');
+  if(sf){ if(!db.stores.includes(sf)){ db.stores.push(sf); persist(); renderStores(); storeNote=`🏪 新しい店舗「${esc(sf)}」を見つけたので登録しました。<br><br>`; } $('store').value=sf; }
   if(add){ const n=Math.max(st0.seals||0,st0.dates||0,found.length); pastes.push({g,n,miss:n-found.filter(f=>f.kg).length}); }
   $('paste').value=t; renderHint(); renderWork();
   if(!add) $('status').innerHTML+='<br><br>（この文字は、もう読み取り済みでした）';
@@ -325,7 +336,7 @@ function renderWork(){
 }
 function sum(){ const s=work.filter(counted); $('sum').textContent=`今回：${s.length}枚　${s.reduce((a,w)=>a+w.kg,0).toFixed(2)}kg`; }
 function addManual(){ work.push({dt:'', kg:0}); renderWork(); }
-function clearWork(){ if(!work.length||confirm('入力中のシールを消しますか？')){ work=[]; pastes=[]; okNew=false; renderWork(); } }
+function clearWork(){ if(!work.length||confirm('入力中のシールを消しますか？')){ work=[]; pastes=[]; okNew=false; storeNote=''; renderWork(); } }
 
 function saveCollection(){
   const store=$('store').value; if(!store) return alert('先に設定で店舗を登録してください');
@@ -336,7 +347,7 @@ function saveCollection(){
   const total=seals.reduce((a,w)=>a+w.kg,0);
   if(!confirm(`${store}　${$('cdate').value}\n${seals.length}枚　${total.toFixed(2)}kg\nこの内容で記録しますか？`)) return;
   db.collections.push({id:Date.now(), store, date:$('cdate').value, seals:seals.map(s=>({dt:s.dt,kg:s.kg,sheet:s.sheet||1}))});
-  persist(); work=[]; pastes=[]; okNew=false; renderHint(); renderWork(); $('status').textContent='記録しました';
+  persist(); work=[]; pastes=[]; okNew=false; storeNote=''; renderHint(); renderWork(); $('status').textContent='記録しました';
 }
 
 // ===== 記録 =====
@@ -344,11 +355,17 @@ function renderHistory(){
   const st=$('hstore').value, mo=$('hmonth').value;
   const list=db.collections.filter(c=>(!st||c.store===st)&&(!mo||c.date.startsWith(mo))).sort((a,b)=>b.date.localeCompare(a.date));
   let n=0,kg=0;
-  $('hlist').innerHTML = list.map(c=>{
+  const card=c=>{
     const t=c.seals.reduce((a,s)=>a+s.kg,0); n+=c.seals.length; kg+=t;
     return `<div class="card"><b>${c.date}</b>　${esc(c.store)}<div class="total">${c.seals.length}枚　${t.toFixed(2)}kg</div>
       <details><summary class="muted">シールの内訳</summary><table>${c.seals.map(s=>`<tr><td>${s.dt?s.dt.replace('T',' '):'日時なし'}</td><td>${s.kg.toFixed(2)}kg</td></tr>`).join('')}</table></details>
       <button class="small" style="margin-top:8px" onclick="delCol(${c.id})">この記録を消す</button></div>`;
+  };
+  // 店舗ごとのフォルダ
+  const names=[...new Set(list.map(c=>c.store))];
+  $('hlist').innerHTML = names.map(s=>{
+    const cs=list.filter(c=>c.store===s), sn=cs.reduce((a,c)=>a+c.seals.length,0), sk=cs.reduce((a,c)=>a+c.seals.reduce((b,x)=>b+x.kg,0),0);
+    return `<details class="folder" ${names.length===1?'open':''}><summary>📁 <b>${esc(s)}</b>　${cs.length}回　${sn}枚　${sk.toFixed(2)}kg</summary>${cs.map(card).join('')}</details>`;
   }).join('') || '<div class="card muted">記録はまだありません</div>';
   $('hsum').textContent = `合計：${list.length}回　${n}枚　${kg.toFixed(2)}kg`;
 }
