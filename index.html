@@ -37,7 +37,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版5（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版6（11/20）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -132,15 +132,19 @@ function delStore(i){ if(confirm(db.stores[i]+' をリストから消します�
 $('store').onchange = () => { markDone(); renderWork(); };
 
 // ===== 既に数えたシールかどうか =====
-const sealKey = (store, dt, kg) => store+'|'+dt+'|'+Number(kg).toFixed(2);
-function countedKeys(store){
-  const s = new Set();
-  db.collections.filter(c=>c.store===store).forEach(c=>c.seals.forEach(x=>s.add(sealKey(store,x.dt,x.kg))));
-  return s;
-}
+// 台紙のシールは重さで見分ける。日時が両方とも読めているときは日時も合わせる
+// 同じ重さが2枚あれば、前回の記録にも2枚あるときだけ両方を「数えた」とする
+const same=(a,b)=>Number(a).toFixed(2)===Number(b).toFixed(2);
 function markDone(){
-  const keys = countedKeys($('store').value);
-  work.forEach(w => { w.done = !!(w.kg && keys.has(sealKey($('store').value,w.dt,w.kg))); if(w.done) w.on=false; });
+  const store=$('store').value, from=new Date(($('cdate').value||today())+'T00:00');
+  from.setDate(from.getDate()-60); const fromS=from.toISOString().slice(0,10);
+  const pool=[]; db.collections.filter(c=>c.store===store&&c.date>=fromS).forEach(c=>c.seals.forEach(x=>pool.push({...x})));
+  work.forEach(w=>{ if(w.done) w.on=true; w.done=false; });
+  [w=>p=>w.dt&&p.dt===w.dt, w=>p=>!w.dt||!p.dt].forEach(rule=>work.forEach(w=>{
+    if(w.done||!w.kg) return;
+    const p=pool.find(p=>!p.used&&same(p.kg,w.kg)&&rule(w)(p));
+    if(p){ p.used=true; w.done=true; w.on=false; }
+  }));
 }
 
 // ===== 文字の読み取り（iPhoneの「テキスト認識表示」でコピーした文字。外には送らない） =====
@@ -149,12 +153,16 @@ async function pasteText(){
   catch { $('status').textContent='自動で貼り付けできませんでした。下の枠を長押しして「ペースト」してください。'; }
 }
 function readText(t){
-  const found=parseText(t||'');
-  let add=0;
-  found.forEach(f=>{ if(!work.some(w=>w.dt===f.dt&&w.kg===f.kg)){ work.push({...f,on:true}); add++; } });
+  const found=parseText(t||''), st0=parseText.stats||{};
+  // 同じ文字を2回読んだときに二重にならないよう、一覧にあるものと1枚ずつ突き合わせる
+  const had=work.map(w=>({...w})); let add=0;
+  found.forEach(f=>{ const h=had.find(w=>!w.used&&w.dt===f.dt&&same(w.kg,f.kg)); if(h) h.used=true; else { work.push({...f,on:true}); add++; } });
   // 店舗名が文字の中にあれば自動で選ぶ
   const st=db.stores.find(x=>t.includes(x)); if(st) $('store').value=st;
-  $('status').textContent=`シール${found.length}枚を読み取り、新しく${add}枚を一覧に加えました。数字を確認してください。`;
+  const n=Math.max(st0.seals||0,st0.dates||0,found.length), miss=n-found.filter(f=>f.kg).length;
+  $('status').innerHTML = miss>0
+    ? `<b style="color:var(--warn)">⚠ シール${n}枚のうち、${miss}枚の重さが読めていません。</b><br>写真を撮り直して読み直すか、赤い行に重さを入れてください。`
+    : `✅ シール${n}枚を見つけ、${n}枚とも重さを読めました（新しく${add}枚を一覧に加えました）。<br>最後に、<b>台紙の一番最後の番号が${n}になっているか</b>と、写真と数字が合っているかを見てください。`;
   $('paste').value=t; markDone(); renderWork();
 }
 function parseText(t){
@@ -163,7 +171,7 @@ function parseText(t){
   const s=t.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0))
     .replace(/(鮮魚|魚のアラ)/g,'\n$1\n').replace(/(20[2-3]\d(?=[^\d\n]+\d))/g,'\n$1');
   const lines=s.split('\n').map(x=>x.trim()).filter(x=>x);
-  if(!lines.some(x=>/鮮魚|アラ/.test(x))) return parseLoose(t);
+  if(!lines.some(x=>/鮮魚|アラ/.test(x))){ parseText.stats={}; return parseLoose(t); }
   const out=[]; let prevAnchor=false;
   lines.forEach((ln,i)=>{
     if(/鮮魚|アラ/.test(ln)){
@@ -173,12 +181,15 @@ function parseText(t){
     prevAnchor=false;
     const re=/(\d{1,3})\s*[.,:;·・]?\s*(\d{2})\s*[kKｋxX]/g; let m;
     if(readDate(ln)) return;
+    // 「kg」が読めず「20.96」だけの行も重さとして拾う
+    if(!re.test(ln)&&/^\d{1,3}[.,]\d{2}\D{0,2}$/.test(ln)) ln=ln.replace(/\D{0,2}$/,'kg'); re.lastIndex=0;
     while((m=re.exec(ln))){
       const kg=parseFloat(m[1]+'.'+m[2]); if(kg<=0||kg>300) continue;
       const w=out.find(x=>!x.kg); if(w) w.kg=kg; else out.push({dt:'',kg});
     }
   });
-  return out.filter(x=>x.kg||x.dt);
+  parseText.stats={seals:out.length,dates:lines.filter(x=>readDate(x)).length};
+  return out;
 }
 // 「2026#11:148 16#48»」のように漢字が記号や数字に読み違えられても、日時を取り出す
 function readDate(ln){
@@ -240,7 +251,7 @@ function renderWork(){
       <input class="dt" type="datetime-local" value="${w.dt}" onchange="work[${i}].dt=this.value;markDone();renderWork()">
       <input class="wt" type="number" step="0.01" inputmode="decimal" value="${w.kg}" onchange="work[${i}].kg=parseFloat(this.value)||0;markDone();renderWork()">
       <button class="small" onclick="work.splice(${i},1);renderWork()">✕</button>
-    </div>${w.done?'<div class="tag">前回までに数えたシール</div>':''}${!w.dt?'<div class="muted">日時は読めませんでした（このままでも記録できます）</div>':''}`).join('')
+    </div>${w.done?'<div class="tag">前回までに数えたシール</div>':''}${!w.kg?'<div class="tag">重さが読めていません。入力してください</div>':''}${!w.dt?'<div class="muted">日時は読めませんでした（このままでも記録できます）</div>':''}`).join('')
     : '<div class="muted" style="padding:10px 0">まだシールがありません</div>';
   sum();
 }
@@ -252,7 +263,7 @@ function saveCollection(){
   const store=$('store').value; if(!store) return alert('先に設定で店舗を登録してください');
   const seals=work.filter(w=>w.on);
   if(!seals.length) return alert('チェックの付いたシールがありません');
-  if(seals.some(s=>!s.kg)) return alert('重量が空のシールがあります');
+  if(work.some(s=>!s.kg)) return alert('重さが読めていないシールがあります。写真を撮り直すか、重さを入力してください');
   const total=seals.reduce((a,w)=>a+w.kg,0);
   if(!confirm(`${store}　${$('cdate').value}\n${seals.length}枚　${total.toFixed(2)}kg\nこの内容で記録しますか？`)) return;
   db.collections.push({id:Date.now(), store, date:$('cdate').value, seals:seals.map(s=>({dt:s.dt,kg:s.kg}))});
