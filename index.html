@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版14（11/20）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版15（11/21）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -102,6 +102,9 @@
     <button class="sub" onclick="exportData()">控えを保存する</button>
     <button class="sub" onclick="document.getElementById('imp').click()">控えから戻す</button>
     <input type="file" id="imp" accept=".json" hidden>
+    <div class="muted" style="margin-top:12px">記録が消えてしまったときは、ショートカットが書き足している控え（iCloud Drive の「Shortcuts」フォルダの「重量の読み取り控え」）を選ぶと、記録を作り直せます。</div>
+    <button class="sub" onclick="document.getElementById('arc').click()">読み取りの控えから作り直す</button>
+    <input type="file" id="arc" accept=".txt,text/plain" hidden>
   </div>
 </section>
 
@@ -503,6 +506,20 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 
 $('cdate').value=today(); $('hmonth').value=period(today()); $('capin').value=cap();
 renderStores(); renderHint(); renderWork();
+$('arc').onchange=async e=>{ const f=e.target.files[0]; if(!f) return; document.querySelector('nav button[data-t=collect]').click(); readText(await f.text()); e.target.value=''; };
+// ショートカット「重量を撮る」は、読み取った文字を「#t=…」に入れてこのページを開く。読み取って、問題がなければ自動で記録する
+(function(){
+  if(!location.hash.startsWith('#t=')) return;
+  let t=''; try{ t=decodeURIComponent(location.hash.slice(3)); }catch{ return; }
+  history.replaceState(null,'',location.pathname+location.search);
+  readText(t);
+  if((t.match(/撮影日[:：]/g)||[]).length>1) return; // まとめ読み込みは readBatch が記録する
+  if(!pastes.length||work.some(w=>!w.kg)||(analyze.need&&!okNew)||work.some(w=>w.early)) return; // 確認が必要
+  const add=work.filter(counted), st=$('store').value, d=$('cdate').value.slice(5).replace('-','/');
+  if(!add.length){ $('status').innerHTML=`✅ ${d}　${esc(st)}：前回から増えたシールはありませんでした（記録はしていません）`; work=[]; pastes=[]; renderWork(); return; }
+  const sp=snapshot(); saveCollection(true); renderWork();
+  $('status').innerHTML=`<b>✅ 自動で記録しました</b><br>${d}　${esc(st)}<br>撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg<br>（前回から増えた分：${add.length}枚　${kgs(add)}kg）<br><br>写真と見比べて違っていたら、「記録」の画面で消して撮り直してください。`;
+})();
 </script>
 </body>
 </html>
