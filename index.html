@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版15（11/21）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版16（11/21）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -136,14 +136,21 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
 // ===== 店舗 =====
 function renderStores(){
   const opts = db.stores.map(s=>`<option>${esc(s)}</option>`).join('');
-  $('store').innerHTML = opts || '<option value="">（設定で店舗を登録してください）</option>';
+  $('store').innerHTML = (opts || '<option value="">（店舗を選んでください）</option>') + '<option value="__new">＋ 店舗を追加する…</option>';
   $('hstore').innerHTML = '<option value="">すべて</option>' + opts;
   $('storelist').innerHTML = db.stores.map((s,i)=>
     `<div class="seal"><span style="flex:1">${esc(s)}</span><button class="small" onclick="delStore(${i})">消す</button></div>`).join('');
 }
 function addStore(){ const v=$('newstore').value.trim(); if(!v) return; if(!db.stores.includes(v)) db.stores.push(v); $('newstore').value=''; persist(); renderStores(); }
 function delStore(i){ if(confirm(db.stores[i]+' をリストから消しますか？（記録は残ります）')){ db.stores.splice(i,1); persist(); renderStores(); } }
-$('store').onchange = () => { renderHint(); renderWork(); };
+$('store').onchange = () => {
+  if($('store').value==='__new'){
+    const v=(prompt('店舗の名前を入れてください（例：上越店）')||'').trim();
+    if(v&&!db.stores.includes(v)){ db.stores.push(v); persist(); }
+    renderStores(); $('store').value=v||db.stores[0]||'';
+  }
+  renderHint(); renderWork();
+};
 $('cdate').onchange = () => { renderHint(); renderWork(); };
 
 // ===== 台紙の見張り =====
@@ -305,6 +312,7 @@ function readText(t){
   if(sf){ if(!db.stores.includes(sf)){ db.stores.push(sf); persist(); renderStores(); storeNote=`🏪 新しい店舗「${esc(sf)}」を見つけたので登録しました。<br><br>`; } $('store').value=sf; }
   if(add){ const n=Math.max(st0.seals||0,st0.dates||0,found.length); pastes.push({g,n,miss:n-found.filter(f=>f.kg).length}); }
   $('paste').value=t; renderHint(); renderWork();
+  if(found.length&&!$('store').value) $('status').innerHTML='<b style="color:var(--warn)">⚠ 店舗名が読み取れませんでした。上の「店舗」で選ぶか、「＋ 店舗を追加する…」を選んでください。</b><br><br>'+$('status').innerHTML;
   if(!add) $('status').innerHTML+='<br><br>（この文字は、もう読み取り済みでした）';
 }
 function parseText(t){
@@ -510,7 +518,10 @@ $('arc').onchange=async e=>{ const f=e.target.files[0]; if(!f) return; document.
 // ショートカット「重量を撮る」は、読み取った文字を「#t=…」に入れてこのページを開く。読み取って、問題がなければ自動で記録する
 (function(){
   if(!location.hash.startsWith('#t=')) return;
-  let t=''; try{ t=decodeURIComponent(location.hash.slice(3)); }catch{ return; }
+  const raw=location.hash.slice(3); let t='';
+  try{ t=decodeURIComponent(raw); }
+  catch{ t=raw.replace(/%[0-9A-Fa-f]{2}/g,m=>m) ; try{ t=decodeURIComponent(raw.replace(/%(?![0-9A-Fa-f]{2})/g,'%25')); }catch{ t=unescape(raw); } }
+  if(!t.trim()){ $('status').innerHTML='⚠ ショートカットから文字が届きませんでした。緑のボタンで貼り付けてください。'; return; }
   history.replaceState(null,'',location.pathname+location.search);
   readText(t);
   if((t.match(/撮影日[:：]/g)||[]).length>1) return; // まとめ読み込みは readBatch が記録する
