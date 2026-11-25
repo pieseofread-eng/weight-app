@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版21（11/26）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版22（11/26）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -559,8 +559,21 @@ function fromShortcut(){
   const sp=snapshot(); if(!saveCollection(true)) return; renderWork();
   $('status').innerHTML=`<b>✅ 自動で記録しました</b><br>${d}　${esc(st)}<br>撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg<br>（前回から増えた分：${add.length}枚　${kgs(add)}kg）<br><br>写真と見比べて違っていたら、「記録」の画面で消して撮り直してください。`;
 }
-fromShortcut();
-window.addEventListener('hashchange',fromShortcut);
+// iPhoneは公開先のページを10分ほど覚えているので、開いたときに新しい版があるかを確かめ、あれば読み直す
+const MYVER=22;
+async function newer(){
+  try{
+    const r=await fetch(location.pathname+'?check='+Date.now(),{cache:'no-store'});
+    const m=(await r.text()).match(/const MYVER=(\d+);/);
+    return m&&+m[1]>MYVER;
+  }catch{ return false; }
+}
+async function start(){
+  if(await newer()){ location.replace(location.pathname+'?v='+Date.now()+location.hash); return; }
+  fromShortcut();
+}
+start();
+window.addEventListener('hashchange',start);
 </script>
 </body>
 </html>
