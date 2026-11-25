@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版19（11/25）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版20（11/25）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -50,6 +50,7 @@
     <a class="sub" style="display:block;text-align:center;text-decoration:none;padding:12px;margin-top:10px;border:1px solid var(--main);border-radius:10px;color:var(--main)" href="shortcuts://run-shortcut?name=%E5%8F%B0%E7%B4%99%E3%81%AE%E5%86%99%E7%9C%9F%E3%82%92%E8%AA%AD%E3%82%80">🖼 写真アプリの写真から読む</a>
     <button class="sub" onclick="pasteText()">📋 自動で開かないときは、ここで貼り付け</button>
   </div>
+  <div class="card"><b>📒 最近の記録</b><div id="recent"></div></div>
   <div class="card">
     <label>店舗</label>
     <select id="store"></select>
@@ -188,7 +189,13 @@ function sheetState(store){
   return {sheet,list,old:seals.filter(x=>sh(x)!==sheet).slice(-cap()*3),last:dated[dated.length-1]||list[list.length-1],monthNew};
 }
 const fmt=x=>`${x.dt?x.dt.slice(5).replace('-','/').replace('T',' '):'日時なし'}・${x.kg.toFixed(2)}kg`;
+function renderRecent(){
+  const cs=[...db.collections].sort((a,b)=>b.id-a.id).slice(0,5);
+  $('recent').innerHTML = cs.length ? '<table>'+cs.map(c=>`<tr><td>${c.date.slice(5).replace('-','/')}</td><td>${esc(c.store)}</td><td>台紙 ${c.snapN??c.seals.length}枚</td><td>${(c.snapKg??+kgs(c.seals)).toFixed(2)}kg</td></tr>`).join('')+'</table>'
+    : '<div class="muted">まだ記録はありません</div>';
+}
 function renderHint(){
+  renderRecent();
   const st=sheetState($('store').value), C=cap(), n=st.list.length, p=period($('cdate').value||today());
   const pm=p.split('-').map(Number);
   $('hint').innerHTML = `この撮影日は <b>${ym(p)}分</b> の集計です（${ym(p)}の最後の回収日は ${pm[1]}/${lastPickup(pm[0],pm[1])}）<br>`
@@ -289,10 +296,10 @@ function readBatch(t,marks){
     readText(b.text);
     if(!work.length){ log.push(`・${md}：シールが見つかりませんでした`); continue; }
     const st=$('store').value;
-    if(work.some(w=>!w.kg)||(analyze.need&&!okNew)||work.some(w=>w.early)){ held.push(b); heldStores.add(st); log.push(`・${md}　${esc(st)}：<b style="color:var(--warn)">確認が必要です</b>`); continue; }
+    if(work.some(w=>!w.kg)||(analyze.need&&!okNew)||work.some(w=>w.early)||!readText.storeFound){ held.push(b); heldStores.add(st); log.push(`・${md}　${esc(st)}：<b style="color:var(--warn)">確認が必要です</b>`); continue; }
     const add=work.filter(counted);
     if(!add.length){ log.push(`・${md}　${esc(st)}：前回から増えたシールはありませんでした`); continue; }
-    const sp=snapshot(); saveCollection(true);
+    const sp=snapshot(); if(!saveCollection(true)){ held.push(b); heldStores.add(st); log.push(`・${md}：<b style="color:var(--warn)">記録できませんでした（確認が必要です）</b>`); continue; }
     log.push(`・${md}　${esc(st)}：台紙 ${sp.n}枚 ${sp.kg.toFixed(2)}kg（増えた分 ${add.length}枚 ${kgs(add)}kg）を記録しました`);
   }
   // 確認が必要な最初の写真を、下の一覧に出す
@@ -314,7 +321,7 @@ function readText(t){
   const had=work.map(w=>({...w})), g=Date.now()+Math.random(); let add=0;
   found.forEach(f=>{ const h=had.find(w=>!w.used&&w.dt===f.dt&&same(w.kg,f.kg)); if(h) h.used=true; else { work.push({...f,g}); add++; } });
   // 店舗名（「○○店」）を文字から見つけて選ぶ。初めての店舗なら自動で登録する
-  const sf=findStore(t||'');
+  const sf=findStore(t||''); readText.storeFound=!!sf;
   if(sf){ if(!db.stores.includes(sf)){ db.stores.push(sf); persist(); renderStores(); storeNote=`🏪 新しい店舗「${esc(sf)}」を見つけたので登録しました。<br><br>`; } $('store').value=sf; }
   if(add){ const n=Math.max(st0.seals||0,st0.dates||0,found.length); pastes.push({g,n,miss:n-found.filter(f=>f.kg).length}); }
   $('paste').value=t; renderHint(); renderWork();
@@ -463,12 +470,16 @@ function addManual(){ work.push({dt:'', kg:0}); renderWork(); }
 function clearWork(){ if(!work.length||confirm('入力中のシールを消しますか？')){ work=[]; pastes=[]; okNew=false; storeNote=''; renderWork(); } }
 
 function saveCollection(auto){
-  const store=$('store').value; if(!store) return alert('先に設定で店舗を登録してください');
-  if(work.some(s=>!s.kg)) return alert('重さが読めていないシールがあります。写真を撮り直すか、重さを入力してください');
-  if(analyze.need&&!okNew) return alert('台紙が替わったようです。古い台紙も読み取るか、「このまま数える」を押してください');
+  const store=$('store').value; if(!store||store==='__new'){ if(auto) return false; return alert('上の「店舗」で店舗を選んでください'); }
+  if(work.some(s=>!s.kg)){ if(auto) return false; return alert('重さが読めていないシールがあります。写真を撮り直すか、重さを入力してください'); }
+  if(analyze.need&&!okNew){ if(auto) return false; return alert('台紙が替わったようです。古い台紙も読み取るか、「このまま数える」を押してください'); }
   const seals=work.filter(counted), sp=snapshot();
-  if(!seals.length) return alert('前回から増えたシールがありません');
+  if(!seals.length){
+    const msg=work.some(w=>w.done)?'この台紙のシールは、もう全部記録してあります。\n上の「最近の記録」で確かめられます。':'読み取ったシールがありません。';
+    if(auto) return false; return alert(msg);
+  }
   if(!auto&&!confirm(`${store}　撮影日 ${$('cdate').value}\n撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg\n（前回から増えた分：${seals.length}枚　${kgs(seals)}kg）\nこの内容で記録しますか？`)) return;
+  if(store!=='テスト店'&&db.stores.includes('テスト店')){ db.collections=db.collections.filter(c=>c.store!=='テスト店'); db.stores=db.stores.filter(s=>s!=='テスト店'); renderStores(); $('store').value=store; }
   db.collections.push({id:Date.now(), store, date:$('cdate').value, period:period($('cdate').value), snapN:sp.n, snapKg:+sp.kg.toFixed(2), seals:seals.map(s=>({dt:s.dt,kg:s.kg,sheet:s.sheet||1}))});
   persist(); work=[]; pastes=[]; okNew=false; storeNote=''; renderHint(); if(auto) return true; renderWork(); $('status').textContent='記録しました';
 }
@@ -535,9 +546,10 @@ function fromShortcut(){
   readText(t);
   if((t.match(/撮影日[:：]/g)||[]).length>1) return; // まとめ読み込みは readBatch が記録する
   if(!pastes.length||work.some(w=>!w.kg)||(analyze.need&&!okNew)||work.some(w=>w.early)) return; // 確認が必要
+  if(!readText.storeFound){ $('status').innerHTML='<b style="color:var(--warn)">⚠ 写真から店舗名が読み取れませんでした（台紙の下の店名が写っていないかもしれません）。</b><br>上の「店舗」で正しい店舗を選んでから、下の「この内容で記録する」を押してください。<br><br>'+$('status').innerHTML; return; }
   const add=work.filter(counted), st=$('store').value, d=$('cdate').value.slice(5).replace('-','/');
-  if(!add.length){ $('status').innerHTML=`✅ ${d}　${esc(st)}：前回から増えたシールはありませんでした（記録はしていません）`; work=[]; pastes=[]; renderWork(); return; }
-  const sp=snapshot(); saveCollection(true); renderWork();
+  if(!add.length){ work=[]; pastes=[]; renderWork(); $('status').innerHTML=`<b>✅ ${d}　${esc(st)}：この台紙のシールは、もう全部記録してあります</b><br>（新しく増えたシールはありませんでした。上の「最近の記録」で確かめられます）`; return; }
+  const sp=snapshot(); if(!saveCollection(true)) return; renderWork();
   $('status').innerHTML=`<b>✅ 自動で記録しました</b><br>${d}　${esc(st)}<br>撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg<br>（前回から増えた分：${add.length}枚　${kgs(add)}kg）<br><br>写真と見比べて違っていたら、「記録」の画面で消して撮り直してください。`;
 }
 fromShortcut();
