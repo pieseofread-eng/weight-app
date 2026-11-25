@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版20（11/25）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版21（11/26）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -126,6 +126,13 @@
 const KEY = 'weightSealApp_v1';
 let db = JSON.parse(localStorage.getItem(KEY) || '{"stores":[],"collections":[]}');
 function persist(){ localStorage.setItem(KEY, JSON.stringify(db)); }
+// 2026-11-25 の試し用の台紙（12.34・8.76・20.50kg）の記録を消す。上越店に入ってしまったまちがいの記録も含む
+(function(){
+  const T=['12.34','8.76','20.50'], n=db.collections.length;
+  db.collections=db.collections.filter(c=>!(c.store==='テスト店'||(c.seals.length&&c.seals.every(s=>T.includes(Number(s.kg).toFixed(2))))));
+  db.stores=db.stores.filter(s=>s!=='テスト店');
+  if(db.collections.length!==n||n===0) persist();
+})();
 
 let work = []; // 今回の候補 {dt:'2026-11-07T16:18', kg:11.46, on:true}
 
