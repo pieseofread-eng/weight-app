@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版22（11/26）</span></header>
+<header>重量シール集計 <span style="font-size:12px;font-weight:normal">版23（11/26）</span></header>
 
 <!-- 回収 -->
 <section id="tab-collect" class="on">
@@ -278,8 +278,10 @@ const dateNote=()=>pastes.length?`📅 撮影日：${$('cdate').value.slice(5).r
 function findStore(t){
   const known=db.stores.find(x=>t.includes(x)); if(known) return known;
   const cnt={}; t.split(/\s+/).forEach(w=>{ const m=w.match(/^([^\d\s【】（）()「」.,:;#]{1,10}店)$/); if(m) cnt[m[1]]=(cnt[m[1]]||0)+1; });
-  const best=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];
-  return best&&cnt[best]>=2?best:null; // 読み違いを避けるため、2回以上出てきた名前だけ
+  const best=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0]; if(!best) return null;
+  // 知っている店舗と1文字だけ違う名前（「奥野店」と「興野店」など）は、その店舗の読み違いとみなす
+  const near=db.stores.find(s=>s.length===best.length&&[...s].filter((c,i)=>c!==best[i]).length<=1);
+  return near||best; // シールが1枚だけの台紙もあるので、1回でも店名として認める
 }
 // ===== 文字の読み取り（iPhoneの「テキスト認識表示」でコピーした文字。外には送らない） =====
 async function pasteText(){
@@ -560,7 +562,7 @@ function fromShortcut(){
   $('status').innerHTML=`<b>✅ 自動で記録しました</b><br>${d}　${esc(st)}<br>撮影した時点の台紙：${sp.n}枚　${sp.kg.toFixed(2)}kg<br>（前回から増えた分：${add.length}枚　${kgs(add)}kg）<br><br>写真と見比べて違っていたら、「記録」の画面で消して撮り直してください。`;
 }
 // iPhoneは公開先のページを10分ほど覚えているので、開いたときに新しい版があるかを確かめ、あれば読み直す
-const MYVER=22;
+const MYVER=23;
 async function newer(){
   try{
     const r=await fetch(location.pathname+'?check='+Date.now(),{cache:'no-store'});
